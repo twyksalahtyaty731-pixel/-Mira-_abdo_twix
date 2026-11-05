@@ -10,7 +10,7 @@
 const fs = require('fs');
 const path = require('path');
 
-const DEFAULT_NICK = 'ℝ𝕖𝕞𝕠 » . «';
+const DEFAULT_NICK = '⋆ 𝙈𝙄𝙍𝘼 ⋆';
 const DIR = path.join(__dirname, '..', 'Heba_DB');
 const FILE = path.join(DIR, 'bot_nick.json');
 const FATAL = /rate[ _-]?limit|too many|checkpoint|spam|temporar|blocked|login|expired|not logged|try again|محظور/i;   // أخطاء تعني أن نتوقف لحماية الحساب
