@@ -1,15 +1,5 @@
 /**
  * .رفع — تغيير صور الأوامر (للمطور فقط)
- *
- * الطريقة:
- *   1) ردّ على صورة بـ  .رفع   (أو أرسل الصورة وفي تعليقها .رفع)
- *   2) يعرض البوت الأوامر التي تستعمل صورًا، ردّ برقم الأمر (أو اكتب .رفع <رقم>)
- *      - الرقم وحده: يستبدل الصور القديمة بالجديدة
- *      - الرقم + اضافة: (للأوامر ذات المجلد) يضيف الصورة بجانب القديمة
- *   3) يحفظ البوت الصورة مكان القديمة فورًا، بلا إعادة تشغيل.
- *
- * الحفظ بعد إعادة النشر: الصور تُخزَّن أيضًا في Heba_DB/custom_images.json
- * فيرفعها cloudSync إلى GitHub تلقائيًا، وتُستعاد عند التشغيل.
  */
 const fs = require('fs');
 const path = require('path');
@@ -18,23 +8,45 @@ const axios = require('axios');
 module.exports.config = {
     name: 'رفع', aliases: ['upload', 'تغيير_صورة'],
     description: 'ردّ على صورة بـ رفع لتغيير صورة أحد الأوامر',
-    usage: 'رفع (ردًّا على صورة) ثم رقم الأمر', category: 'tools', cooldown: 3, adminOnly: true
+    usage: 'رفع (ردًّا على صورة) ثم رقم الأمر', category: 'tools', cooldown: 3, 
+    adminOnly: false // 👈 جعلناها false لنتمكن من الرد على غير المطور بأنفسنا
 };
 
-const ROOT = path.join(__dirname, '..', '..');
+// ═══════════════════════════════════════════════
+//   🔍 دالة ذكية لإيجاد جذر المشروع الحقيقي
+// ═══════════════════════════════════════════════
+function findRoot() {
+    let dir = __dirname;
+    while (dir !== path.parse(dir).root) {
+        if (fs.existsSync(path.join(dir, 'package.json')) || fs.existsSync(path.join(dir, 'index.js'))) {
+            return dir;
+        }
+        dir = path.dirname(dir);
+    }
+    return path.join(__dirname, '..', '..'); // احتياطي
+}
+
+const ROOT = findRoot();
 const ASSETS = path.join(ROOT, 'assets');
 const STORE = path.join(ROOT, 'Heba_DB', 'custom_images.json');
+// ═══════════════════════════════════════════════
+
 const IMG_RE = /\.(jpe?g|png)$/i;
 const MAX_BYTES = 6 * 1024 * 1024;
 const TTL = 3 * 60 * 1000;
 const CANCEL = ['الغاء', 'إلغاء', 'cancel'];
 const ADD_WORDS = ['اضافة', 'إضافة', 'اضافه', 'add'];
 
+console.log('[رفع] 📂 سيتم حفظ الصور في المسار الصحيح:', ASSETS);
+
 /** الأوامر التي تقرأ صورًا من assets (kind=file: صورة واحدة باسم ثابت، kind=dir: مجلد صور) */
 const TARGETS = [
-    { key: 'help',    label: 'اوامر (قائمة الأوامر)',          kind: 'file', file: path.join(ASSETS, 'help') },
-    { key: 'divorce', label: 'طلاق',                            kind: 'dir',  dir: path.join(ASSETS, 'divorce') },
-    { key: 'slap',    label: 'صفع (قالب الصفعة)',               kind: 'dir',  dir: path.join(ASSETS, 'slap') },
+    { key: 'help',    label: 'اوامر (قائمة الأوامر)',           kind: 'file', file: path.join(ASSETS, 'help') },
+    { key: 'up',      label: 'حالة (صورة أمر الحالة)',           kind: 'file', file: path.join(ASSETS, 'up') },      // 👈 مضاف
+    { key: 'goodbye', label: 'غادر (صورة أمر المغادرة)',        kind: 'file', file: path.join(ASSETS, 'goodbye') }, // 👈 مضاف
+    { key: 'mahw',    label: 'محو (صورة أمر المحو)',             kind: 'file', file: path.join(ASSETS, 'mahw') },    // 👈 مضاف
+    { key: 'divorce', label: 'طلاق',                             kind: 'dir',  dir:  path.join(ASSETS, 'divorce') },
+    { key: 'slap',    label: 'صفع (قالب الصفعة)',                kind: 'dir',  dir:  path.join(ASSETS, 'slap') },
     { key: 'lock',    label: 'القفل (إضافة البوت من غير المطور)', kind: 'file', file: path.join(ASSETS, 'lock') }
 ];
 
@@ -161,11 +173,9 @@ async function choose(ctx, p, text) {
     const t = TARGETS[n - 1];
     pending.delete(key);
     try {
-        const count = saveImage(t, p.buf, p.ext, add && t.kind === 'dir');
-        const lines = [`✅ تم تغيير صورة «${t.label}»`];
-        if (t.kind === 'dir') lines.push(add ? `➕ أُضيفت للمجلد (المجموع ${count})` : '🔄 استُبدلت الصور القديمة بالجديدة');
-        if (t.key === 'slap') lines.push(`📐 إن اختلفت أماكن الوجوه: ${cfg.getPrefix()}صفع شبكة ثم ${cfg.getPrefix()}صفع ضبط`);
-        await say(deco.successLine(lines.join('\n')));
+        saveImage(t, p.buf, p.ext, add && t.kind === 'dir');
+        // 👈 الرسالة الجديدة المبسطة
+        await say("تمت اضافة الصورة بنجاح ✅");
     } catch (e) {
         await say(deco.errorBox('تعذّر حفظ الصورة: ' + (e && e.message || e)));
     }
@@ -176,6 +186,14 @@ async function choose(ctx, p, text) {
 module.exports.run = async ctx => {
     const { api, event, args, helpers, deco, cfg } = ctx;
     const say = t => helpers.reply(api, event, t);
+    
+    // ═══════════════════════════════════════════
+    //   🔒 حماية المطور مع الرد المخصص
+    // ═══════════════════════════════════════════
+    if (!cfg.isAdmin(String(event.senderID))) {
+        return say("من انت ايها الفلاح ؛-؛");
+    }
+
     const key = keyOf(event);
 
     // .رفع <رقم> بعد أن أُرسلت الصورة
@@ -213,7 +231,10 @@ module.exports.onMessage = async ctx => {
     const { event, cfg } = ctx;
     const p = live(keyOf(event));
     if (!p) return false;
+    
+    // غير المطور: نتجاهله هنا بصمت
     if (!cfg.isAdmin(String(event.senderID))) return false;
+    
     const text = String(event.body || '').trim();
     if (!text || text.length > 30) return false;
     return choose(ctx, p, text);
