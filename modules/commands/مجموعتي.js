@@ -66,7 +66,7 @@ module.exports.run = async function({ api, event, args, Users }) {
         } catch (_) { /* تجاهل */ }
 
         const infoText =
-            `⌬ ━━ 𝗥𝗘𝗠𝗢 𝗚𝗥𝗢𝗨𝗣 ━━ ⌬\n\n` +
+            `⌬ ━━  𝙈𝙄𝙍𝘼 𝗚𝗥𝗢𝗨𝗣 ━━ ⌬\n\n` +
             `${emoji} الاسم: ${groupName}\n` +
             `👥 عدد الأعضاء: ${totalMembers}\n` +
             `👑 عدد الأدمن: ${totalAdmins}\n\n`;
