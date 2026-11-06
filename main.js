@@ -124,6 +124,46 @@ async function handleMessage(api, event) {
     const cmd = commands.get(input) || commands.get(aliases.get(input));
     if (!cmd) return;
 
+    // ═══════════════════════════════════════════════
+    // 🛡️ فلتر الأوامر الموقوفة في المجموعات (مع رد موردكاي)
+    // ═══════════════════════════════════════════════
+    try {
+        const disabledPath = path.join(__dirname, 'Heba_DB', 'disabled_cmds.json');
+        if (fs.existsSync(disabledPath)) {
+            const disabledData = JSON.parse(fs.readFileSync(disabledPath, 'utf8'));
+            const threadDisabled = disabledData[String(threadID)] || [];
+            
+            if (threadDisabled.includes(cmd.config.name.toLowerCase())) {
+                // 🖼️ الرابط المباشر لصورة موردكاي
+                const IMAGE_URL = 'https://i.ibb.co/99KXV2M9/8a0738e9512ea058115e0da036a7c804.jpg';
+
+                try {
+                    const axios = require('axios');
+                    const os = require('os');
+                    
+                    const res = await axios.get(IMAGE_URL, { responseType: 'arraybuffer', timeout: 10000 });
+                    const tmpPath = path.join(os.tmpdir(), `disabled_${Date.now()}.jpg`);
+                    fs.writeFileSync(tmpPath, Buffer.from(res.data));
+
+                    // إرسال الصورة كرد على الأمر المعطل
+                    return api.sendMessage({
+                        attachment: fs.createReadStream(tmpPath)
+                    }, threadID, () => {
+                        // مسح الملف المؤقت بعد الإرسال
+                        try { fs.unlinkSync(tmpPath); } catch (e) {}
+                    }, messageID);
+
+                } catch (e) {
+                    // إذا فشل تحميل الصورة، نتجاهل الأمر بصمت
+                    return;
+                }
+            }
+        }
+    } catch (e) { 
+        log('خطأ في قراءة الأوامر الموقوفة: ' + e.message, 'warn'); 
+    }
+    // ═══════════════════════════════════════════════
+
     const isAdmin = cfg.isAdmin(String(senderID));
     if (cmd.config.adminOnly && !isAdmin) {
         return helpers.reply(api, event, deco.reject('هذا الأمر للمطور فقط'));
