@@ -4,6 +4,8 @@
  */
 const fs = require('fs-extra');
 const path = require('path');
+const axios = require('axios');
+const os = require('os');
 const log = require('./utils/log');
 
 const config = require('./config.json');
@@ -18,6 +20,9 @@ global.getText = (mod, key, ...args) => {
     args.forEach((a, i) => { text = text.split('%' + (i + 1)).join(a); });
     return text;
 };
+
+// 🛡️ ذاكرة مؤقتة لمنع تكرار الرسائل
+global.processedMessages = new Set();
 
 const utils = require('./utils');
 const cfg = require('./utils/config');
@@ -56,7 +61,7 @@ function loadCommands() {
 const xpCooldown = new Map();
 let botID = '';
 
-/** يسجّل المستخدم في Heba_DB/users.json (بدون نص الرسائل) ويجلب اسمه مرة واحدة أسبوعيًا */
+/** يسجّل المستخدم في Heba_DB/users.json ويجلب اسمه مرة واحدة أسبوعيًا */
 function recordUser(api, senderID, threadID) {
     try {
         users.touch(senderID, threadID);
@@ -70,7 +75,7 @@ function recordUser(api, senderID, threadID) {
     }
 }
 
-/** الأوامر التي تصدّر onMessage تستقبل الرسائل العادية (بلا بادئة)، وإن أعادت true توقفنا */
+/** الأوامر التي تصدّر onMessage تستقبل الرسائل العادية (بلا بادئة) */
 async function runMessageHooks(ctx) {
     for (const cmd of global.client.commands.values()) {
         if (typeof cmd.onMessage !== 'function') continue;
@@ -83,9 +88,9 @@ async function runMessageHooks(ctx) {
     return false;
 }
 
-/** الأوامر التي تصدّر onEvent تستقبل أحداث المجموعة (تغيير الاسم/الكنية/الصورة...) */
+/** الأوامر التي تصدّر onEvent تستقبل أحداث المجموعة */
 async function runEventHooks(api, event) {
-    if (power.isOff(event.threadID)) return;          // البوت موقوف في هذه المجموعة
+    if (power.isOff(event.threadID)) return;
     const ctx = { api, event, helpers, states, deco, cfg, utils };
     for (const cmd of global.client.commands.values()) {
         if (typeof cmd.onEvent !== 'function') continue;
@@ -98,21 +103,27 @@ async function handleMessage(api, event) {
     const { senderID, threadID, messageID, body } = event;
     if (!body || String(senderID) === String(botID)) return;
 
-    // موقوف في هذه المجموعة؟ لا نرد على أحد، إلا أمر ايقاف/تشغيل من المطور ليتمكن من إعادة التشغيل
+    // ═══════════════════════════════════════════════
+    // 🛡️ 1. فلتر منع التكرار (Anti-Duplicate)
+    // ═══════════════════════════════════════════════
+    if (global.processedMessages.has(messageID)) return;
+    global.processedMessages.add(messageID);
+    if (global.processedMessages.size > 2000) global.processedMessages.clear();
+
+    // موقوف في هذه المجموعة؟ لا نرد على أحد، إلا أمر ايقاف/تشغيل من المطور
     if (power.isOff(threadID) && !power.isPowerCommand(body, cfg.getPrefix(), cfg.isAdmin(String(senderID)))) return;
 
     recordUser(api, senderID, threadID);
 
-    // خبرة على الرسائل العادية (مرة كل 30 ثانية لكل مستخدم)
     const now = Date.now();
     if (now - (xpCooldown.get(senderID) || 0) > 30000) {
         xpCooldown.set(senderID, now);
-        helpers.addXP(senderID, 5 + Math.floor(Math.random() * 11)); // يُسجَّل المستوى بصمت بدون إرسال رسالة
+        helpers.addXP(senderID, 5 + Math.floor(Math.random() * 11));
     }
 
     const prefix = cfg.getPrefix();
     if (!body.startsWith(prefix)) {
-        await runMessageHooks({ api, event, helpers, states, deco, cfg, utils }); // رسائل عادية (مثل ردود لعبة الوظائف)
+        await runMessageHooks({ api, event, helpers, states, deco, cfg, utils });
         return;
     }
 
@@ -125,7 +136,7 @@ async function handleMessage(api, event) {
     if (!cmd) return;
 
     // ═══════════════════════════════════════════════
-    // 🛡️ فلتر الأوامر الموقوفة في المجموعات (مع رد موردكاي)
+    // 🛡️ 2. فلتر الأوامر الموقوفة (مع رد موردكاي)
     // ═══════════════════════════════════════════════
     try {
         const disabledPath = path.join(__dirname, 'Heba_DB', 'disabled_cmds.json');
@@ -134,28 +145,21 @@ async function handleMessage(api, event) {
             const threadDisabled = disabledData[String(threadID)] || [];
             
             if (threadDisabled.includes(cmd.config.name.toLowerCase())) {
-                // 🖼️ الرابط المباشر لصورة موردكاي
                 const IMAGE_URL = 'https://i.ibb.co/99KXV2M9/8a0738e9512ea058115e0da036a7c804.jpg';
 
                 try {
-                    const axios = require('axios');
-                    const os = require('os');
-                    
                     const res = await axios.get(IMAGE_URL, { responseType: 'arraybuffer', timeout: 10000 });
                     const tmpPath = path.join(os.tmpdir(), `disabled_${Date.now()}.jpg`);
                     fs.writeFileSync(tmpPath, Buffer.from(res.data));
 
-                    // إرسال الصورة كرد على الأمر المعطل
                     return api.sendMessage({
                         attachment: fs.createReadStream(tmpPath)
                     }, threadID, () => {
-                        // مسح الملف المؤقت بعد الإرسال
                         try { fs.unlinkSync(tmpPath); } catch (e) {}
                     }, messageID);
 
                 } catch (e) {
-                    // إذا فشل تحميل الصورة، نتجاهل الأمر بصمت
-                    return;
+                    return; // تجاهل بصمت إذا فشل تحميل الصورة
                 }
             }
         }
@@ -203,19 +207,21 @@ function findFCA() {
     throw new Error('لم أجد مكتبة تسجيل الدخول. نفّذ: npm install');
 }
 
-/* ─────────── إعادة الاتصال التلقائي ─────────── */
-const num = (name, def) => Number(process.env[name]) || def;
-const MIN_DELAY = num('RECONNECT_MIN_MS', 5000);        // أول انتظار قبل إعادة المحاولة
-const MAX_DELAY = num('RECONNECT_MAX_MS', 300000);      // أقصى انتظار (5 دقائق)
-const MAX_FAILURES = num('RECONNECT_MAX_FAILURES', 5);  // بعدها نتوقف لحماية الحساب
-const STABLE_MS = num('RECONNECT_STABLE_MS', 120000);   // اتصال أطول من هذا يُعدّ ناجحًا
-const LOGIN_TIMEOUT = num('LOGIN_TIMEOUT_MS', 90000);
+/* ─────────── إعادة الاتصال التلقائي (محسّن) ─────────── */
+const MQTT_BACKOFF_BASE = 2000;       // 2 ثانية
+const MQTT_BACKOFF_MAX = 300000;      // 5 دقائق
+const MQTT_MAX_FAILURES = 5;          // التوقف بعد 5 محاولات فاشلة
+let mqttFailures = 0;
+let mqttDelay = MQTT_BACKOFF_BASE;
+
+const LOGIN_TIMEOUT = 90000;
 const FATAL = /not logged in|checkpoint|login-approval|incorrect|expired|invalid|blocked/i;
 
 const DEBUG_EVENTS = process.env.DEBUG_EVENTS === '1';
-let traceLeft = 0; // نسجّل أول 10 أحداث بعد كل اتصال لنتأكد أن الرسائل تصل
+let traceLeft = 0;
+
 function traceEvent(event) {
-    if (['presence', 'typ', 'read_receipt'].includes(event.type)) return; // أحداث كثيرة لا تهمنا
+    if (['presence', 'typ', 'read_receipt'].includes(event.type)) return;
     if (!DEBUG_EVENTS && traceLeft <= 0) return;
     traceLeft--;
     const from = event.senderID || event.author || '-';
@@ -239,14 +245,14 @@ function loginOnce(login, appState) {
     });
 }
 
-/** يستمع للرسائل ويرجع (resolve) عند انقطاع الاتصال مع سبب الانقطاع */
 function listenUntilDrop(api) {
     return new Promise(resolve => {
         let finished = false, stop;
         const finish = reason => {
             if (finished) return;
             finished = true;
-            try { if (typeof stop === 'function') stop(); } catch (e) { /* تجاهل */ }
+            try { if (typeof api.stopListenMqtt === 'function') api.stopListenMqtt(); } catch (e) {}
+            try { if (typeof stop === 'function') stop(); } catch (e) {}
             resolve(reason);
         };
         stop = (api.listenMqtt || api.listen).call(api, (e, event) => {
@@ -254,7 +260,7 @@ function listenUntilDrop(api) {
             if (e) return finish(e);
             traceEvent(event);
             if (event.type === 'message' || event.type === 'message_reply') {
-                if (String(event.senderID) !== String(botID)) { try { require('./utils/humanize').onIncoming(api, event); } catch (e) { /* تجاهل */ } }
+                if (String(event.senderID) !== String(botID)) { try { require('./utils/humanize').onIncoming(api, event); } catch (e) {} }
                 handleMessage(api, event);
             }
             else if (event.type === 'event') {
@@ -263,74 +269,76 @@ function listenUntilDrop(api) {
                 runEventHooks(api, event);
             }
         });
-        if (finished) { try { if (typeof stop === 'function') stop(); } catch (e) { /* تجاهل */ } }
+        if (finished) { try { if (typeof stop === 'function') stop(); } catch (e) {} }
     });
 }
 
 function setupSession(api, ctx) {
-    api.setOptions({ listenEvents: true, selfListen: false, logLevel: 'silent', updatePresence: false, forceLogin: true });
+    api.setOptions({ listenEvents: true, selfListen: false, logLevel: 'silent', updatePresence: false, forceLogin: true, online: false });
     try { require('./utils/humanize').wrap(api); } catch (e) { log('تعذر تفعيل السلوك البشري: ' + e.message, 'warn'); }
     global.client.api = api;
     botID = api.getCurrentUserID();
     log.loader(`تم تسجيل الدخول: ${botID} — بانتظار الرسائل...`);
     traceLeft = 10;
-    try { require('./utils/botNick').startSweep(() => global.client.api || api); } // ضبط كنية البوت في كل المجموعات (ببطء وفي الخلفية)
+    try { require('./utils/botNick').startSweep(() => global.client.api || api); }
     catch (e) { log('تعذر بدء ضبط الكنية: ' + e.message, 'warn'); }
     let fresh = null;
-    try { // حفظ الكوكيز المحدّثة
+    try {
         fresh = api.getAppState();
         if (!ctx.fromEnv && Array.isArray(fresh) && fresh.length) fs.writeFileSync(ctx.appPath, JSON.stringify(fresh, null, 2));
-    } catch (e) { /* تجاهل */ }
+    } catch (e) {}
     return Array.isArray(fresh) && fresh.length ? fresh : null;
 }
 
-/**
- * يبقي البوت شغالًا: عند أي انقطاع يعيد تسجيل الدخول بانتظار متزايد (5ث، 10ث، 20ث...).
- * إن تكرر فشل الدخول/الجلسة MAX_FAILURES مرات متتالية يتوقف، لأن الكوكيز غالبًا انتهت
- * والاستمرار بالمحاولة قد يعرّض الحساب للحظر.
- */
 async function runWithAutoReconnect(appState, ctx) {
     const login = findFCA();
-    let failures = 0;
-    let delay = MIN_DELAY;
 
     for (;;) {
-        const startedAt = Date.now();
-        let problem, counted = false;
+        let problem;
         try {
             log.loader('جارٍ تسجيل الدخول إلى فيسبوك...');
             const api = await loginOnce(login, appState);
             appState = setupSession(api, ctx) || appState;
+            
+            mqttFailures = 0;
+            mqttDelay = MQTT_BACKOFF_BASE;
+
             const drop = await listenUntilDrop(api);
             problem = errMsg(drop);
-            counted = FATAL.test(problem);          // انقطاع عابر لا يُحسب، أما خطأ الجلسة فيُحسب
+
+            if (/Connection refused|Server Unavailable|not logged in/i.test(problem)) {
+                mqttFailures++;
+                log(`⚠️ فشل اتصال MQTT (${mqttFailures}/${MQTT_MAX_FAILURES}). السبب: ${problem}`, 'warn');
+            } else {
+                mqttFailures = 0;
+                mqttDelay = MQTT_BACKOFF_BASE;
+                log(`انقطع الاتصال (سبب عابر): ${problem}`, 'warn');
+            }
         } catch (e) {
             problem = errMsg(e);
-            counted = true;                          // فشل تسجيل الدخول يُحسب
+            mqttFailures++;
+            log(`فشل تسجيل الدخول (${mqttFailures}/${MQTT_MAX_FAILURES}): ${problem}`, 'error');
         }
 
-        if (Date.now() - startedAt > STABLE_MS) { failures = 0; delay = MIN_DELAY; } // كان الاتصال مستقرًا
-        if (counted) failures++;
-        log(`انقطع الاتصال: ${problem}`, 'warn');
-
-        if (failures >= MAX_FAILURES) {
-            log(`تكرر الفشل ${failures} مرات متتالية، أوقفت المحاولة. جدّد الكوكيز ثم أعد التشغيل.`, 'error');
-            process.exit(1);
+        if (mqttFailures >= MQTT_MAX_FAILURES) {
+            log(`❌ تكرر فشل الاتصال ${mqttFailures} مرات. تم إيقاف المحاولة لحماية الحساب.`, 'error');
+            log(`💡 يرجى تجديد ملف appstate.json (الكوكيز) ثم إعادة تشغيل البوت.`, 'error');
+            process.exit(1); 
         }
-        log.loader(`إعادة المحاولة بعد ${Math.round(delay / 1000)} ثانية (فشل متتالٍ: ${failures}/${MAX_FAILURES})`);
-        await sleep(delay);
-        delay = Math.min(delay * 2, MAX_DELAY);
+
+        log.loader(`إعادة المحاولة بعد ${Math.round(mqttDelay / 1000)} ثانية...`);
+        await sleep(mqttDelay);
+        mqttDelay = Math.min(mqttDelay * 2, MQTT_BACKOFF_MAX);
     }
 }
 
 function start() {
     loadCommands();
 
-    // الوضع الرسمي (Messenger Platform): يُفعَّل بوجود PAGE_ACCESS_TOKEN، بدون كوكيز
     if (process.env.PAGE_ACCESS_TOKEN) {
         log.loader('الوضع الرسمي: Messenger Platform (بدون كوكيز)');
         const extra = (process.env.ADMIN_PSIDS || '').split(',').map(x => x.trim()).filter(Boolean);
-        config.ADMINBOT = [...(config.ADMINBOT || []), ...extra]; // الأدمن هنا يُعرَّف بأيدي PSID
+        config.ADMINBOT = [...(config.ADMINBOT || []), ...extra];
         botID = process.env.PAGE_ID || '';
         const official = require('./utils/official');
         global.client.api = official.start({ onMessage: (api, event) => handleMessage(api, event) });
@@ -338,7 +346,6 @@ function start() {
     }
 
     const appPath = path.join(__dirname, config.APPSTATE_PATH || 'appstate.json');
-    // الأولوية لمتغير البيئة FB_COOKIE (مناسب للاستضافة)، ثم ملف appstate.json
     const fromEnv = process.env.FB_COOKIE || process.env.APPSTATE || '';
     let rawCookies = fromEnv;
     if (!rawCookies && fs.existsSync(appPath)) rawCookies = fs.readFileSync(appPath, 'utf8');
@@ -350,7 +357,7 @@ function start() {
     try { appState = parseCookies(rawCookies); }
     catch (e) { log('مشكلة في الكوكيز: ' + e.message, 'error'); process.exit(1); }
 
-    setInterval(() => {}, 1 << 30); // يمنع انتهاء العملية بصمت
+    setInterval(() => {}, 1 << 30);
     runWithAutoReconnect(appState, { appPath, fromEnv });
 }
 
