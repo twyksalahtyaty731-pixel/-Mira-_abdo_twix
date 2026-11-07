@@ -1,3 +1,4 @@
+
 const axios = require('axios');
 const fs = require('fs');
 const os = require('os');
@@ -10,11 +11,57 @@ module.exports.config = {
     usage: 'فطفط <الرابط> (أو بالرد على نص)',
     category: 'admin',
     cooldown: 30,
-    adminOnly: false // نتحقق يدوياً لإرسال الصورة
+    adminOnly: false
 };
 
 const KEY = process.env.GROQ_API_KEY || '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';
 const BASE = 'https://api.groq.com/openai/v1';
+
+// ═══════════════════════════════════════════════
+// 🔄 قائمة النماذج (بالترتيب) - سيتم تجربة كل نموذج حتى ينجح أحدهم
+// ═══════════════════════════════════════════════
+const MODELS = [
+    'openai/gpt-oss-120b',
+    'qwen/qwen3.6-27b',
+    'openai/gpt-oss-20b'
+];
+
+/** دالة لإرسال الطلب إلى Groq مع تجربة النماذج بالترتيب */
+async function callGroqWithFallback(systemPrompt, userMessage) {
+    let lastError = null;
+
+    for (const model of MODELS) {
+        try {
+            console.log(`[فطفط] محاولة استخدام النموذج: ${model}`);
+            const response = await axios.post(`${BASE}/chat/completions`, {
+                model: model,
+                messages: [
+                    { role: 'system', content: systemPrompt },
+                    { role: 'user', content: userMessage }
+                ],
+                temperature: 0.5,
+                max_tokens: 2500
+            }, {
+                headers: {
+                    'Authorization': `Bearer ${KEY}`,
+                    'Content-Type': 'application/json'
+                },
+                timeout: 60000
+            });
+
+            // إذا نجح الطلب، نرجع النتيجة فوراً
+            return response.data.choices[0].message.content;
+
+        } catch (error) {
+            console.error(`[فطفط] فشل النموذج ${model}:`, error.message);
+            lastError = error;
+            // نكمل الحلقة لنجرب النموذج التالي
+        }
+    }
+
+    // إذا فشلت جميع النماذج، نرمي الخطأ الأخير
+    throw lastError || new Error('فشلت جميع النماذج المتاحة.');
+}
 
 module.exports.run = async ({ api, event, args, helpers, cfg }) => {
     // ═══════════════════════════════════════════════
@@ -34,7 +81,6 @@ module.exports.run = async ({ api, event, args, helpers, cfg }) => {
                 try { fs.unlinkSync(tmpPath); } catch (e) {}
             }, event.messageID);
         } catch (e) {
-            // في حال فشل تحميل الصورة، نرسل النص فقط
             return helpers.reply(api, event, "لست مؤهلا لإستخدام هذا الامر ايها الفلاح");
         }
     }
@@ -81,24 +127,8 @@ Generate the investigation report now.`;
         // تفاعل بعلامة البحث
         api.setMessageReaction('🔎', event.messageID, () => {}, true);
 
-        // إرسال الطلب إلى Groq
-        const response = await axios.post(`${BASE}/chat/completions`, {
-            model: 'llama-3.3-70b-versatile',
-            messages: [
-                { role: 'system', content: SYSTEM_PROMPT },
-                { role: 'user', content: `Generate the investigation report.` }
-            ],
-            temperature: 0.5,
-            max_tokens: 2500 
-        }, {
-            headers: {
-                'Authorization': `Bearer ${KEY}`,
-                'Content-Type': 'application/json'
-            },
-            timeout: 60000 // مهلة دقيقة واحدة
-        });
-
-        const aiReport = response.data.choices[0].message.content;
+        // استدعاء الدالة التي تجرب النماذج بالترتيب
+        const aiReport = await callGroqWithFallback(SYSTEM_PROMPT, "Generate the investigation report.");
 
         if (!aiReport) {
             throw new Error("لم يتم استلام نص من الذكاء الاصطناعي.");
