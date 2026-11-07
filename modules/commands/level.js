@@ -2,7 +2,7 @@
  * 🎴 مستوى — بطاقة صورة بتفاصيل حسابك ومستواك (صورة الحساب، المستوى، الخبرة، الرصيد، الرتبة، المخزون، الترتيب).
  *   .مستوى            بطاقتك
  *   .مستوى @شخص       بطاقة شخص آخر (أو ردًا على رسالته)
- * تم إضافة ميزة خاصة للمطور (مستوى لا نهائي ورتبة قصوى).
+ * تم إضافة ميزة خاصة للمطور (مستوى 100 ورتبة قصوى).
  */
 const fs = require('fs');
 const os = require('os');
@@ -176,9 +176,10 @@ function makeCard({ level, xp, need, points, inventory, position, total, img, is
 
     // المستوى
     label(d, 'level', XR, 106, 32, [190, 196, 220], 'r');
+    
+    // هنا التعديل: إذا كان مطوراً سيتم طباعة الرقم 100 بدلاً من اللانهاية
     if (isDev) {
-        // رسم علامة اللانهاية للمطور
-        drawInfinity(d, XR - 45, 142, 90, WHITE);
+        number(d, "100", XR, 142, 104, WHITE, 'r');
     } else {
         number(d, String(level), XR, 142, 104, WHITE, 'r');
     }
@@ -275,8 +276,7 @@ module.exports.run = async ({ api, event, args, helpers, states, deco, cfg }) =>
         const adminList = global.config.ADMINBOT || [];
         const isDev = adminList.includes(String(targetID));
 
-        // 3. جلب بيانات المستخدم (هنا نضع بيانات افتراضية، يجب عليك استبدالها بجلب البيانات الحقيقية من قاعدة بياناتك)
-        // مثال: const userData = await users.get(targetID) || {};
+        // 3. جلب بيانات المستخدم
         let userData = {
             level: 1,
             xp: 0,
@@ -297,7 +297,7 @@ module.exports.run = async ({ api, event, args, helpers, states, deco, cfg }) =>
 
         // 4. إعداد البيانات للبطاقة (مع تجاوز القيم إذا كان المطور)
         const cardData = {
-            level: isDev ? "∞" : userData.level,
+            level: isDev ? 100 : userData.level, // تم تغييرها إلى 100 للمطور
             xp: userData.xp,
             need: userData.need,
             points: userData.points,
@@ -332,7 +332,7 @@ module.exports.run = async ({ api, event, args, helpers, states, deco, cfg }) =>
         }, event.messageID);
 
     } catch (err) {
-        console.error("خطأ في أمر المستوى:", err);
+        console.error("خطأ في أمر المستوى:", err); 
         return api.sendMessage("❌ حدث خطأ أثناء إنشاء البطاقة.", event.threadID, event.messageID);
     }
 };
