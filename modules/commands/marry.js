@@ -1,13 +1,18 @@
 
-/**
- * .زوجني [@شخص | رد على رسالة | أيدي]
- * يضع صورة الشخصين على قالب زفاف ثابت.
- */
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const axios = require('axios');
-const { createCanvas, loadImage } = require('@napi-rs/canvas');
+
+// محاولة استدعاء مكتبة الرسم
+let createCanvas, loadImage;
+try {
+    const canvasLib = require('@napi-rs/canvas');
+    createCanvas = canvasLib.createCanvas;
+    loadImage = canvasLib.loadImage;
+} catch (e) {
+    console.log('[زوجني] تحذير: مكتبة @napi-rs/canvas غير مثبتة. سيتم إرسال النص فقط.');
+}
 
 module.exports.config = {
     name: 'زوجني', aliases: ['marry', 'زواج'],
@@ -15,21 +20,16 @@ module.exports.config = {
     usage: 'زوجني [@شخص | رد | أيدي]', category: 'games', cooldown: 20, adminOnly: false
 };
 
-// ═══════════════════════════════════════════════
-// 🌹 رابط قالب الزفاف الثابت 🌹
-// ═══════════════════════════════════════════════
 const TEMPLATE_URL = 'https://i.ibb.co/RpWnWXTn/585d9c169ada4ece1fe67aa62123630e.jpg';
 
 // ═══════════════════════════════════════════════
-// 📐 إحداثيات وضع الصور (نسب مئوية من عرض/ارتفاع الصورة)
-// يمكنك تعديل هذه الأرقام إذا لم تكن الصور في المكان الصحيح
+// 📐 إحداثيات وضع الصور (تم تصحيح الأماكن حسب الصورة)
 // ═══════════════════════════════════════════════
 const COORDS = {
-    groom: { xPct: 0.30, yPct: 0.25, rPct: 0.08 }, // العريس (الشخص الذي طلب الأمر)
-    bride: { xPct: 0.70, yPct: 0.25, rPct: 0.08 }  // العروس (الشخص الثاني)
+    groom: { xPct: 0.68, yPct: 0.23, rPct: 0.08 }, // العريس (صاحب الأمر) - في اليمين
+    bride: { xPct: 0.29, yPct: 0.23, rPct: 0.08 }  // العروس (الشخص الثاني) - في اليسار
 };
 
-/** استدعاء دالة من api بنمط callback وتحويلها إلى Promise */
 const call = (api, method, ...args) => new Promise(resolve => {
     try { api[method](...args, (err, data) => resolve(err ? null : data)); }
     catch (e) { resolve(null); }
@@ -43,7 +43,6 @@ async function fetchAvatar(url) {
     } catch (e) { return null; }
 }
 
-/** رسم صورة داخل دائرة */
 function drawCircleImage(ctx, img, cx, cy, r) {
     if (!img) return;
     ctx.save();
@@ -51,18 +50,11 @@ function drawCircleImage(ctx, img, cx, cy, r) {
     ctx.arc(cx, cy, r, 0, Math.PI * 2);
     ctx.closePath();
     ctx.clip();
-
-    // ضبط أبعاد الصورة لتملأ الدائرة
     const scale = Math.max((r * 2) / img.width, (r * 2) / img.height);
     const w = img.width * scale;
     const h = img.height * scale;
-    const x = cx - w / 2;
-    const y = cy - h / 2;
-
-    ctx.drawImage(img, x, y, w, h);
+    ctx.drawImage(img, cx - w / 2, cy - h / 2, w, h);
     ctx.restore();
-
-    // إطار أبيض حول الدائرة
     ctx.beginPath();
     ctx.arc(cx, cy, r, 0, Math.PI * 2);
     ctx.strokeStyle = '#FFFFFF';
@@ -77,8 +69,6 @@ module.exports.run = async ({ api, event, args, helpers, deco }) => {
 
     let target = helpers.getTarget(event, args);
     let random = false;
-
-    // إذا لم يحدد هدفاً، اختيار شريك عشوائي
     if (!target) {
         if (event.isGroup === false) return reply(deco.warning('منشن الشخص الذي تريد الزواج منه، أو ردّ على رسالته'));
         const info = await call(api, 'getThreadInfo', event.threadID);
@@ -90,60 +80,56 @@ module.exports.run = async ({ api, event, args, helpers, deco }) => {
     if (target === sender) return reply(deco.warning('لا يمكنك الزواج من نفسك 😅'));
     if (target === botId) return reply(deco.warning('أنا بوت 🤖 ولا أتزوج!'));
 
-    // جلب معلومات المستخدمين
     const info = (await call(api, 'getUserInfo', [sender, target])) || {};
     const nameOf = id => (info[id] && info[id].name) || `مستخدم ${id.slice(-4)}`;
     const thumbOf = id => { const u = info[id] || {}; return u.thumbSrc || u.avatar || u.profilePicture || null; };
 
-    // تحميل الصور
-    const [imgA, imgB, templateBuf] = await Promise.all([
-        fetchAvatar(thumbOf(sender)),
-        fetchAvatar(thumbOf(target)),
-        fetchAvatar(TEMPLATE_URL)
-    ]);
-
-    if (!templateBuf) return reply(deco.errorBox('❌ تعذّر تحميل قالب الزفاف. تأكد من الرابط.'));
-
-    // إنشاء الصورة النهائية
-    const templateImg = await loadImage(templateBuf);
-    const canvas = createCanvas(templateImg.width, templateImg.height);
-    const ctx = canvas.getContext('2d');
-
-    // رسم القالب
-    ctx.drawImage(templateImg, 0, 0);
-
-    // حساب الإحداثيات بناءً على أبعاد القالب
-    const groomX = templateImg.width * COORDS.groom.xPct;
-    const groomY = templateImg.height * COORDS.groom.yPct;
-    const groomR = templateImg.width * COORDS.groom.rPct;
-
-    const brideX = templateImg.width * COORDS.bride.xPct;
-    const brideY = templateImg.height * COORDS.bride.yPct;
-    const brideR = templateImg.width * COORDS.bride.rPct;
-
-    // تحميل صور الأفاتار
-    const avatarA = imgA ? await loadImage(imgA) : null;
-    const avatarB = imgB ? await loadImage(imgB) : null;
-
-    // رسم صورتي الشخصين
-    drawCircleImage(ctx, avatarA, groomX, groomY, groomR);
-    drawCircleImage(ctx, avatarB, brideX, brideY, brideR);
-
-    // حفظ الصورة وإرسالها
-    const file = path.join(os.tmpdir(), `marry_${Date.now()}.png`);
-    fs.writeFileSync(file, canvas.toBuffer('image/png'));
-
     const a = nameOf(sender), b = nameOf(target);
-    const body = `💒 تم الزواج! 🎉\n💍 @${a} ❤️ @${b}\n`
-        + (random ? '🎲 اختار لك البوت شريكًا عشوائيًا\n' : '');
+    let body = `💒 تم الزواج! 🎉\n💍 @${a} ❤️ @${b}\n` + (random ? '🎲 اختار لك البوت شريكًا عشوائيًا\n' : '');
+    const mentions = [{ tag: `@${a}`, id: sender }, { tag: `@${b}`, id: target }];
+
+    if (!createCanvas || !loadImage) {
+        return reply({ body: body + '\n(ملاحظة: مكتبة الصور غير مثبتة، تم إرسال النص فقط).', mentions });
+    }
 
     try {
-        await reply({
-            body,
-            attachment: fs.createReadStream(file),
-            mentions: [{ tag: `@${a}`, id: sender }, { tag: `@${b}`, id: target }]
-        });
-    } finally {
+        const [imgA, imgB, templateBuf] = await Promise.all([
+            fetchAvatar(thumbOf(sender)),
+            fetchAvatar(thumbOf(target)),
+            fetchAvatar(TEMPLATE_URL)
+        ]);
+
+        if (!templateBuf) throw new Error('تعذّر تحميل القالب');
+
+        const templateImg = await loadImage(templateBuf);
+        const canvas = createCanvas(templateImg.width, templateImg.height);
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(templateImg, 0, 0);
+
+        // حساب الإحداثيات الجديدة
+        const groomX = templateImg.width * COORDS.groom.xPct;
+        const groomY = templateImg.height * COORDS.groom.yPct;
+        const groomR = templateImg.width * COORDS.groom.rPct;
+
+        const brideX = templateImg.width * COORDS.bride.xPct;
+        const brideY = templateImg.height * COORDS.bride.yPct;
+        const brideR = templateImg.width * COORDS.bride.rPct;
+
+        const avatarA = imgA ? await loadImage(imgA) : null;
+        const avatarB = imgB ? await loadImage(imgB) : null;
+
+        // رسم صاحب الأمر في مكان العريس، والشخص الثاني في مكان العروس
+        drawCircleImage(ctx, avatarA, groomX, groomY, groomR);
+        drawCircleImage(ctx, avatarB, brideX, brideY, brideR);
+
+        const file = path.join(os.tmpdir(), `marry_${Date.now()}.png`);
+        fs.writeFileSync(file, canvas.toBuffer('image/png'));
+
+        await reply({ body, attachment: fs.createReadStream(file), mentions });
         fs.unlink(file, () => {});
+
+    } catch (error) {
+        console.error('[زوجني] خطأ في الرسم:', error.message);
+        return reply({ body: body + '\n(تعذر إرفاق الصورة، تم إرسال النص فقط)', mentions });
     }
 };
