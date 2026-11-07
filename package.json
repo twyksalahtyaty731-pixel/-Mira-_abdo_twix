@@ -10,6 +10,7 @@
     "node": ">=22.12"
   },
   "dependencies": {
+    "@miraipr0ject/assets": "latest",
     "nexus-fca": "^3.4.0",
     "@napi-rs/canvas": "^0.1.56",
     "axios": "^1.6.0",
