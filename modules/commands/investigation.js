@@ -1,10 +1,11 @@
+
 const axios = require('axios');
 
 module.exports.config = {
-    name: 'تحقيق',
+    name: 'فطفط',
     aliases: ['investigate', 'report', 'بلاغ'],
-    description: 'إنشاء تقرير بحثي احترافي باللغة الإنجليزية عن معايير مجتمع فيسبوك (مجموعة/حساب/منشور)',
-    usage: 'تحقيق <الرابط> (أو بالرد على نص/تفاصيل)',
+    description: 'إنشاء تقرير بحثي احترافي باللغة الإنجليزية عن معايير مجتمع فيسبوك',
+    usage: 'فطفط <الرابط> (أو بالرد على نص)',
     category: 'admin',
     cooldown: 30,
     adminOnly: false
@@ -14,14 +15,14 @@ const KEY = process.env.GROQ_API_KEY || 'gsk_BTWFEswZvQ7OHmWuhbWHWGdyb3FYztP1B5n
 const BASE = 'https://api.groq.com/openai/v1';
 
 module.exports.run = async ({ api, event, args, helpers, cfg }) => {
-    // 1. استخراج الرابط من الأمر
+    // 1. استخراج الرابط
     const url = args[0];
     if (!url || !url.includes('facebook.com')) {
-        return helpers.reply(api, event, "⚠️ يرجى إرسال رابط فيسبوك صحيح (مجموعة، حساب، أو منشور).\nمثال: .تحقيق https://www.facebook.com/...");
+        return helpers.reply(api, event, "⚠️ يرجى إرسال رابط فيسبوك صحيح (مجموعة، حساب، أو منشور).\nمثال: .فطفط https://www.facebook.com/...");
     }
 
-    // 2. استخراج الأدلة أو التفاصيل (إذا كان المستخدم يرد على رسالة تحتوي على مخالفات)
-    let providedEvidence = "No additional evidence provided by the user.";
+    // 2. استخراج الأدلة أو التفاصيل
+    let providedEvidence = "No additional evidence provided by the user. Please state that you cannot browse the internet and ask for screenshots or text.";
     if (event.messageReply && event.messageReply.body) {
         providedEvidence = event.messageReply.body;
     } else if (args.length > 1) {
@@ -29,21 +30,20 @@ module.exports.run = async ({ api, event, args, helpers, cfg }) => {
     }
 
     // ═══════════════════════════════════════════
-    // 📝 التعليمات الصارمة (تحديث ليشمل الحسابات والمنشورات)
+    // 📝 التعليمات (Prompt)
     // ═══════════════════════════════════════════
     const SYSTEM_PROMPT = `You are Mira, an intelligent Facebook Community Standards research assistant.
-When a user provides a Facebook URL (which could be a Group, a Profile/Account, or a Post) and/or evidence, you must:
+When a user provides a Facebook URL and evidence, you must:
 
 1. Attempt to analyze the publicly available information based on the provided evidence.
-2. Never claim that you accessed the link if you could not access it. (Note: As an AI, you cannot browse the live internet. You must state this limitation).
-3. If the URL is inaccessible, ask the user to provide screenshots, text, or public post links for analysis.
-4. Analyze the supplied content objectively.
-5. Identify potential violations of Facebook Community Standards ONLY when supported by the provided evidence.
-6. Explain the relevant policy in English.
-7. Generate a structured, professional English report.
-8. Include evidence and links when available.
-9. Never fabricate violations, posts, identities, or evidence.
-10. Keep the report concise and direct (Around 400 to 700 words max).
+2. Never claim that you accessed the link if you could not access it. State this limitation clearly.
+3. Analyze the supplied content objectively.
+4. Identify potential violations of Facebook Community Standards ONLY when supported by the provided evidence.
+5. Explain the relevant policy in English.
+6. Generate a structured, professional English report.
+7. Never fabricate violations, posts, identities, or evidence.
+8. Keep the report concise and direct (Around 400 to 700 words max).
+9. If the provided evidence is "No additional evidence provided...", ask the user to provide screenshots or text excerpts for analysis. Otherwise, generate the report immediately based on the evidence.
 
 TARGET URL:
 ${url}
@@ -51,19 +51,15 @@ ${url}
 USER-PROVIDED EVIDENCE / CONTEXT:
 "${providedEvidence}"
 
-Based on the above, if evidence is provided, analyze it for policy violations (e.g., Hate Speech, Violence, Harassment). If no evidence is provided, explicitly state that you cannot browse the URL and request the user to provide screenshots or text excerpts for analysis.`;
+Generate the investigation report now.`;
 
     try {
-        // تفاعل بعلامة البحث
-        api.setMessageReaction('🔎', event.messageID, () => {}, true);
-        await helpers.reply(api, event, "⏳ جاري تحليل البيانات وإعداد التقرير الاستقصائي باللغة الإنجليزية...");
-
         // إرسال الطلب إلى Groq
         const response = await axios.post(`${BASE}/chat/completions`, {
             model: 'llama-3.3-70b-versatile',
             messages: [
                 { role: 'system', content: SYSTEM_PROMPT },
-                { role: 'user', content: `Generate the investigation report based on the provided evidence.` }
+                { role: 'user', content: `Generate the investigation report.` }
             ],
             temperature: 0.5,
             max_tokens: 2500 
@@ -72,7 +68,7 @@ Based on the above, if evidence is provided, analyze it for policy violations (e
                 'Authorization': `Bearer ${KEY}`,
                 'Content-Type': 'application/json'
             },
-            timeout: 45000 
+            timeout: 60000 // زيادة المهلة إلى دقيقة
         });
 
         const aiReport = response.data.choices[0].message.content;
@@ -82,7 +78,7 @@ Based on the above, if evidence is provided, analyze it for policy violations (e
         }
 
         // ═══════════════════════════════════════════
-        // 🛡️ إجبار الرابط على الظهور في الأعلى والأسفل برمجياً
+        // 🛡️ إجبار الرابط على الظهور في الأعلى والأسفل
         // ═══════════════════════════════════════════
         const finalReport = 
 `🔗 **TARGET URL:** ${url}
@@ -95,21 +91,28 @@ ${aiReport}
         // إرسال التقرير النهائي
         api.sendMessage(finalReport, event.threadID, (err) => {
             if (err) {
-                console.error('[تحقيق] فشل إرسال التقرير:', err);
+                console.error('[فطفط] فشل إرسال التقرير:', err);
                 api.setMessageReaction('❌', event.messageID, () => {}, true);
+                helpers.reply(api, event, "❌ حدث خطأ أثناء إرسال التقرير إلى ماسنجر (قد يكون النص طويلاً جداً).");
             } else {
                 api.setMessageReaction('✅', event.messageID, () => {}, true);
             }
         }, event.messageID);
 
     } catch (error) {
-        console.error('[تحقيق] خطأ:', error.message);
+        console.error('[فطفط] خطأ:', error.message);
         api.setMessageReaction('❌', event.messageID, () => {}, true);
         
-        if (error.response && error.response.status === 429) {
-            return helpers.reply(api, event, "⚠️ Rate limit exceeded. Please try again later.");
+        // طباعة الخطأ الحقيقي للمستخدم لمعرفة السبب
+        let errorMsg = "❌ حدث خطأ غير متوقع.";
+        if (error.response) {
+            errorMsg = `❌ خطأ من خادم الذكاء الاصطناعي (${error.response.status}):\n${JSON.stringify(error.response.data)}`;
+        } else if (error.request) {
+            errorMsg = `❌ لا يوجد استجابة من خادم الذكاء الاصطناعي (قد يكون الاتصال محظوراً أو بطيئاً).`;
+        } else {
+            errorMsg = `❌ خطأ برمجي: ${error.message}`;
         }
-        
-        return helpers.reply(api, event, "❌ An error occurred while generating the report.");
+
+        return helpers.reply(api, event, errorMsg);
     }
 };
