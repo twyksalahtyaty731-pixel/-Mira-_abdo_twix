@@ -11,7 +11,7 @@ try {
     createCanvas = canvasLib.createCanvas;
     loadImage = canvasLib.loadImage;
 } catch (e) {
-    console.log('[زوجني] تحذير: مكتبة @napi-rs/canvas غير مثبتة. سيتم إرسال النص فقط.');
+    console.log('[زوجني] تحذير: مكتبة @napi-rs/canvas غير مثبتة.');
 }
 
 module.exports.config = {
@@ -23,11 +23,11 @@ module.exports.config = {
 const TEMPLATE_URL = 'https://i.ibb.co/RpWnWXTn/585d9c169ada4ece1fe67aa62123630e.jpg';
 
 // ═══════════════════════════════════════════════
-// 📐 إحداثيات وضع الصور (تم تصحيح الأماكن حسب الصورة)
+// 📐 إحداثيات وضع الصور (تم ضبطها بدقة)
 // ═══════════════════════════════════════════════
 const COORDS = {
-    groom: { xPct: 0.68, yPct: 0.23, rPct: 0.08 }, // العريس (صاحب الأمر) - في اليمين
-    bride: { xPct: 0.29, yPct: 0.23, rPct: 0.08 }  // العروس (الشخص الثاني) - في اليسار
+    groom: { xPct: 0.68, yPct: 0.22, rPct: 0.08 }, // صاحب الأمر (العريس) - يمين
+    bride: { xPct: 0.29, yPct: 0.22, rPct: 0.08 }  // الشخص الثاني (العروس) - يسار
 };
 
 const call = (api, method, ...args) => new Promise(resolve => {
@@ -64,9 +64,10 @@ function drawCircleImage(ctx, img, cx, cy, r) {
 
 module.exports.run = async ({ api, event, args, helpers, deco }) => {
     const reply = t => helpers.reply(api, event, t);
-    const sender = String(event.senderID);
+    const sender = String(event.senderID); // صاحب الأمر
     const botId = String(api.getCurrentUserID());
 
+    // جلب الشخص المستهدف
     let target = helpers.getTarget(event, args);
     let random = false;
     if (!target) {
@@ -80,6 +81,7 @@ module.exports.run = async ({ api, event, args, helpers, deco }) => {
     if (target === sender) return reply(deco.warning('لا يمكنك الزواج من نفسك 😅'));
     if (target === botId) return reply(deco.warning('أنا بوت 🤖 ولا أتزوج!'));
 
+    // جلب الأسماء والصور
     const info = (await call(api, 'getUserInfo', [sender, target])) || {};
     const nameOf = id => (info[id] && info[id].name) || `مستخدم ${id.slice(-4)}`;
     const thumbOf = id => { const u = info[id] || {}; return u.thumbSrc || u.avatar || u.profilePicture || null; };
@@ -93,10 +95,11 @@ module.exports.run = async ({ api, event, args, helpers, deco }) => {
     }
 
     try {
+        // تحميل الصور
         const [imgA, imgB, templateBuf] = await Promise.all([
-            fetchAvatar(thumbOf(sender)),
-            fetchAvatar(thumbOf(target)),
-            fetchAvatar(TEMPLATE_URL)
+            fetchAvatar(thumbOf(sender)), // صورة صاحب الأمر
+            fetchAvatar(thumbOf(target)), // صورة الشخص الثاني
+            fetchAvatar(TEMPLATE_URL)     // قالب الزفاف
         ]);
 
         if (!templateBuf) throw new Error('تعذّر تحميل القالب');
@@ -104,9 +107,11 @@ module.exports.run = async ({ api, event, args, helpers, deco }) => {
         const templateImg = await loadImage(templateBuf);
         const canvas = createCanvas(templateImg.width, templateImg.height);
         const ctx = canvas.getContext('2d');
+
+        // رسم القالب الأساسي
         ctx.drawImage(templateImg, 0, 0);
 
-        // حساب الإحداثيات الجديدة
+        // حساب أماكن الدوائر
         const groomX = templateImg.width * COORDS.groom.xPct;
         const groomY = templateImg.height * COORDS.groom.yPct;
         const groomR = templateImg.width * COORDS.groom.rPct;
@@ -118,10 +123,15 @@ module.exports.run = async ({ api, event, args, helpers, deco }) => {
         const avatarA = imgA ? await loadImage(imgA) : null;
         const avatarB = imgB ? await loadImage(imgB) : null;
 
-        // رسم صاحب الأمر في مكان العريس، والشخص الثاني في مكان العروس
+        // ═══════════════════════════════════════════════
+        // رسم الصور في الأماكن الصحيحة
+        // ═══════════════════════════════════════════════
+        // 1. صاحب الأمر (اليمين - العريس)
         drawCircleImage(ctx, avatarA, groomX, groomY, groomR);
+        // 2. الشخص الثاني (اليسار - العروس)
         drawCircleImage(ctx, avatarB, brideX, brideY, brideR);
 
+        // حفظ الصورة وإرسالها
         const file = path.join(os.tmpdir(), `marry_${Date.now()}.png`);
         fs.writeFileSync(file, canvas.toBuffer('image/png'));
 
