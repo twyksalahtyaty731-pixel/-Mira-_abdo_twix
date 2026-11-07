@@ -1,20 +1,44 @@
-
 const axios = require('axios');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 
 module.exports.config = {
     name: 'فطفط',
     aliases: ['investigate', 'report', 'بلاغ'],
-    description: 'إنشاء تقرير بحثي احترافي باللغة الإنجليزية عن معايير مجتمع فيسبوك',
+    description: 'إنشاء تقرير بحثي احترافي باللغة الإنجليزية عن معايير مجتمع فيسبوك (للمطور فقط)',
     usage: 'فطفط <الرابط> (أو بالرد على نص)',
     category: 'admin',
     cooldown: 30,
-    adminOnly: false
+    adminOnly: false // نتحقق يدوياً لإرسال الصورة
 };
 
 const KEY = process.env.GROQ_API_KEY || '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';
 const BASE = 'https://api.groq.com/openai/v1';
 
 module.exports.run = async ({ api, event, args, helpers, cfg }) => {
+    // ═══════════════════════════════════════════════
+    // 🛡️ حماية المطور (إرسال صورة الرفض)
+    // ═══════════════════════════════════════════════
+    if (!cfg.isAdmin(String(event.senderID))) {
+        const IMAGE_URL = 'https://i.ibb.co/99KXV2M9/8a0738e9512ea058115e0da036a7c804.jpg';
+        try {
+            const res = await axios.get(IMAGE_URL, { responseType: 'arraybuffer', timeout: 10000 });
+            const tmpPath = path.join(os.tmpdir(), `reject_${Date.now()}.jpg`);
+            fs.writeFileSync(tmpPath, Buffer.from(res.data));
+
+            return api.sendMessage({
+                body: "لست مؤهلا لإستخدام هذا الامر ايها الفلاح",
+                attachment: fs.createReadStream(tmpPath)
+            }, event.threadID, () => {
+                try { fs.unlinkSync(tmpPath); } catch (e) {}
+            }, event.messageID);
+        } catch (e) {
+            // في حال فشل تحميل الصورة، نرسل النص فقط
+            return helpers.reply(api, event, "لست مؤهلا لإستخدام هذا الامر ايها الفلاح");
+        }
+    }
+
     // 1. استخراج الرابط
     const url = args[0];
     if (!url || !url.includes('facebook.com')) {
@@ -54,6 +78,9 @@ USER-PROVIDED EVIDENCE / CONTEXT:
 Generate the investigation report now.`;
 
     try {
+        // تفاعل بعلامة البحث
+        api.setMessageReaction('🔎', event.messageID, () => {}, true);
+
         // إرسال الطلب إلى Groq
         const response = await axios.post(`${BASE}/chat/completions`, {
             model: 'llama-3.3-70b-versatile',
@@ -68,7 +95,7 @@ Generate the investigation report now.`;
                 'Authorization': `Bearer ${KEY}`,
                 'Content-Type': 'application/json'
             },
-            timeout: 60000 // زيادة المهلة إلى دقيقة
+            timeout: 60000 // مهلة دقيقة واحدة
         });
 
         const aiReport = response.data.choices[0].message.content;
@@ -103,7 +130,6 @@ ${aiReport}
         console.error('[فطفط] خطأ:', error.message);
         api.setMessageReaction('❌', event.messageID, () => {}, true);
         
-        // طباعة الخطأ الحقيقي للمستخدم لمعرفة السبب
         let errorMsg = "❌ حدث خطأ غير متوقع.";
         if (error.response) {
             errorMsg = `❌ خطأ من خادم الذكاء الاصطناعي (${error.response.status}):\n${JSON.stringify(error.response.data)}`;
