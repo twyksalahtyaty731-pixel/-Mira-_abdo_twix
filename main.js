@@ -194,7 +194,18 @@ async function handleMessage(api, event) {
 
 /* ─────────── تسجيل الدخول ─────────── */
 function findFCA() {
-    const candidates = [process.env.FCA_MODULE, config.FCA_MODULE, '@dongdev/fca-unofficial', 'fca-unofficial', 'ws3-fca'].filter(Boolean);
+    // ═══════════════════════════════════════════════
+    // 🔄 إضافة المكتبة الجديدة nexus-fca كخيار أول
+    // ═══════════════════════════════════════════════
+    const candidates = [
+        process.env.FCA_MODULE, 
+        config.FCA_MODULE, 
+        'nexus-fca', // 👈 المكتبة القوية هنا
+        '@dongdev/fca-unofficial', 
+        'fca-unofficial', 
+        'ws3-fca'
+    ].filter(Boolean);
+    
     for (const name of candidates) {
         try {
             const lib = require(name);
@@ -274,7 +285,17 @@ function listenUntilDrop(api) {
 }
 
 function setupSession(api, ctx) {
-    api.setOptions({ listenEvents: true, selfListen: false, logLevel: 'silent', updatePresence: false, forceLogin: true, online: false });
+    // إعدادات محسنة للاتصال
+    api.setOptions({ 
+        listenEvents: true, 
+        selfListen: false, 
+        logLevel: 'silent', 
+        updatePresence: false, 
+        forceLogin: true, 
+        online: false,
+        autoReconnect: true, // 👈 تفعيل إعادة الاتصال
+        connectTimeout: 60000 // 👈 زيادة وقت الاتصال
+    });
     try { require('./utils/humanize').wrap(api); } catch (e) { log('تعذر تفعيل السلوك البشري: ' + e.message, 'warn'); }
     global.client.api = api;
     botID = api.getCurrentUserID();
