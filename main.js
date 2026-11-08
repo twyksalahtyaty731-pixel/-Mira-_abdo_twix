@@ -248,12 +248,15 @@ function loginOnce(login, appState) {
         const timer = setTimeout(() => reject(new Error('انتهت مهلة تسجيل الدخول')), LOGIN_TIMEOUT);
         
         // ═══════════════════════════════════════════════
-        // 🌐 إعدادات البروكسي الثابت (من Webshare)
+        // 🌐 إعدادات البروكسي الثابت (تم تنظيف الرابط لحل مشكلة Invalid URL)
         // ═══════════════════════════════════════════════
-        const PROXY_URL = process.env.PROXY_URL || 'http://qwxzocqw:3224k1msvkkr@45.38.107.97:6014/';
+        let PROXY_URL = process.env.PROXY_URL || 'http://qwxzocqw:3224k1msvkkr@45.38.107.97:6014';
+        
+        // هذا السطر يحذف أي مسافات فارغة وأي شرطة مائلة (/) في نهاية الرابط
+        PROXY_URL = PROXY_URL.trim().replace(/\/$/, '');
         
         const loginOptions = {
-            proxy: PROXY_URL,         // ربط البروكسي
+            proxy: PROXY_URL,         // الرابط النظيف
             autoReconnect: true,      // تفعيل إعادة الاتصال التلقائي
             randomUserAgent: true,    // تدوير بصمة المتصفح لتجنب الكشف
             forceLogin: true,         // إجبار تسجيل الدخول
