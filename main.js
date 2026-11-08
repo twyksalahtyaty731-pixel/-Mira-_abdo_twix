@@ -246,13 +246,31 @@ const errMsg = e => (typeof e === 'string' ? e : (e && (e.error || e.message)) |
 function loginOnce(login, appState) {
     return new Promise((resolve, reject) => {
         const timer = setTimeout(() => reject(new Error('انتهت مهلة تسجيل الدخول')), LOGIN_TIMEOUT);
+        
+        // ═══════════════════════════════════════════════
+        // 🌐 إعدادات البروكسي الثابت (من Webshare)
+        // ═══════════════════════════════════════════════
+        const PROXY_URL = process.env.PROXY_URL || 'http://qwxzocqw:3224k1msvkkr@45.38.107.97:6014/';
+        
+        const loginOptions = {
+            proxy: PROXY_URL,         // ربط البروكسي
+            autoReconnect: true,      // تفعيل إعادة الاتصال التلقائي
+            randomUserAgent: true,    // تدوير بصمة المتصفح لتجنب الكشف
+            forceLogin: true,         // إجبار تسجيل الدخول
+            online: false             // إخفاء حالة الاتصال
+        };
+
         try {
-            login({ appState }, (err, api) => {
+            // تمرير الكوكيز كخيار أول، وإعدادات البروكسي كخيار ثاني
+            login({ appState }, loginOptions, (err, api) => {
                 clearTimeout(timer);
                 if (err) return reject(new Error(errMsg(err)));
                 resolve(api);
             });
-        } catch (e) { clearTimeout(timer); reject(e); }
+        } catch (e) { 
+            clearTimeout(timer); 
+            reject(e); 
+        }
     });
 }
 
@@ -293,8 +311,8 @@ function setupSession(api, ctx) {
         updatePresence: false, 
         forceLogin: true, 
         online: false,
-        autoReconnect: true, // 👈 تفعيل إعادة الاتصال
-        connectTimeout: 60000 // 👈 زيادة وقت الاتصال
+        autoReconnect: true, 
+        connectTimeout: 60000 
     });
     try { require('./utils/humanize').wrap(api); } catch (e) { log('تعذر تفعيل السلوك البشري: ' + e.message, 'warn'); }
     global.client.api = api;
