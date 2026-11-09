@@ -1,14 +1,16 @@
+
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const axios = require('axios');
 
-// 🗂️ لحفظ حالة الأقسام لكل مستخدم (لكي نعرف ماذا يفعل عند الرد برقم)
+// 🗂️ لحفظ حالة الأقسام لكل مستخدم
 const menuSessions = new Map();
 
 module.exports.config = {
     name: 'اوامر', aliases: ['help', 'الاوامر', 'مساعدة'],
     description: 'عرض قائمة الأوامر أو تفاصيل أمر معيّن',
-    usage: 'اوامر [اسم الأمر]', category: 'system', cooldown: 3, adminOnly: false
+    usage: 'اوامر [اسم الأمر | الكل]', category: 'system', cooldown: 3, adminOnly: false
 };
 
 // ═══════════════════════════════════════════════
@@ -33,7 +35,7 @@ module.exports.run = async ({ api, event, args, helpers, deco, cfg }) => {
     const senderID = String(event.senderID);
 
     // 1️⃣ إذا طلب تفاصيل أمر معين مباشرة
-    if (args[0] && isNaN(args[0])) {
+    if (args[0] && isNaN(args[0]) && args[0] !== 'الكل' && args[0].toLowerCase() !== 'all') {
         const key = args[0].toLowerCase();
         const cmd = commands.get(key) || commands.get(aliases.get(key));
         
@@ -61,77 +63,96 @@ module.exports.run = async ({ api, event, args, helpers, deco, cfg }) => {
         }
     }
 
-    const catKeys = Object.keys(categories);
-    
-    // حفظ الجلسة لهذا المستخدم
-    menuSessions.set(senderID, { 
-        cats: catKeys, 
-        timestamp: Date.now() 
-    });
+    let menuText = "";
 
-    // تنظيف الجلسات القديمة
-    for (const [key, val] of menuSessions) {
-        if (Date.now() - val.timestamp > 300000) menuSessions.delete(key);
+    // ═══════════════════════════════════════════
+    // 3️⃣ التحقق مما إذا كان الطلب هو "الكل"
+    // ═══════════════════════════════════════════
+    if (args[0] === 'الكل' || args[0].toLowerCase() === 'all') {
+        
+        menuText += `${topBorder}\n${botName}\n${topBorder}\n\n`;
+        menuText += `🔖 | الـمـطـور : 『 [ تـويـكـس ] 』\n`;
+        menuText += `📦 | إجمالي الأوامر : [ ${commands.size} ]\n\n`;
+
+        for (const [cat, cmds] of Object.entries(categories)) {
+            const catName = catNames[cat] || `📁 ${cat}`;
+            
+            menuText += `${topBorder}\n`;
+            menuText += `         ${catName}\n`;
+            menuText += `${topBorder}\n`;
+            
+            cmds.forEach(c => {
+                const lock = c.config.adminOnly ? "🔒 " : "";
+                const desc = c.config.description ? ` - ${c.config.description.split('|')[0].trim()}` : "";
+                menuText += `⚡ | ${lock}${prefix}${c.config.name}${desc}\n`;
+            });
+            menuText += `\n`; // مسافة بين كل قسم
+        }
+        
+        menuText += `${topBorder}`;
+
+    } 
+    // ═══════════════════════════════════════════
+    // 4️⃣ العرض الافتراضي (الأقسام المرقمة)
+    // ═══════════════════════════════════════════
+    else {
+        const catKeys = Object.keys(categories);
+        
+        // حفظ الجلسة لهذا المستخدم
+        menuSessions.set(senderID, { cats: catKeys, timestamp: Date.now() });
+        for (const [key, val] of menuSessions) {
+            if (Date.now() - val.timestamp > 300000) menuSessions.delete(key);
+        }
+
+        menuText += `${topBorder}\n${botName}\n${topBorder}\n\n`;
+        menuText += `🔖 | الـمـطـور : 『 [ تـويـكـس ] 』\n`;
+        menuText += `📦 | الأوامر : [ ${commands.size} ]\n\n`;
+        
+        menuText += `${topBorder}\n`;
+        menuText += `         📂 الأقسام المتاحة\n`;
+        menuText += `${topBorder}\n`;
+        
+        catKeys.forEach((cat, index) => {
+            const catName = catNames[cat] || `📁 ${cat}`;
+            menuText += `${index + 1}️⃣ ${catName}\n`;
+        });
+
+        menuText += `\n${topBorder}\n`;
+        menuText += `💡 | رد على هذه الرسالة بـ (رقم القسم) لعرض أوامره، أو اكتب ${prefix}اوامر الكل لعرض كل الأوامر.\n`;
+        menuText += `${topBorder}`;
     }
 
-    // 3️⃣ بناء رسالة الأقسام الرئيسية
-    let menuText = `${topBorder}\n${botName}\n${topBorder}\n\n`;
-    menuText += `🔖 | الـمـطـور : 『 [ تـويـكـس ] 』\n`;
-    menuText += `📦 | الأوامر : [ ${commands.size} ]\n\n`;
-    
-    menuText += `${topBorder}\n`;
-    menuText += `         📂 الأقسام المتاحة\n`;
-    menuText += `${topBorder}\n`;
-    
-    catKeys.forEach((cat, index) => {
-        const catName = catNames[cat] || `📁 ${cat}`;
-        menuText += `${index + 1}️⃣ ${catName}\n`;
-    });
-
-    menuText += `\n${topBorder}\n`;
-    menuText += `💡 | رد على هذه الرسالة بـ (رقم القسم) لعرض أوامره.\n`;
-    menuText += `${topBorder}`;
-
     // ═══════════════════════════════════════════
-    // 🖼️ إرفاق الصورة (نفس كودك السابق)
+    // 5️⃣ إرسال الرسالة مع الصورة (إن وجدت)
     // ═══════════════════════════════════════════
-    let file = null, temp = false;
     try {
-        const own = [process.env.HELP_IMAGE, ...['jpg', 'jpeg', 'png'].map(e => path.join(__dirname, '..', '..', 'assets', `help.${e}`))]
-            .filter(Boolean).find(f => fs.existsSync(f));
-        if (own) file = own;
-        else {
-            file = path.join(os.tmpdir(), `kira-help-${process.pid}.png`);
-            if (!fs.existsSync(file)) fs.writeFileSync(file, require('../../utils/helpBanner').makeHelpBanner());
+        let file = null;
+        const own = ['jpg', 'jpeg', 'png'].map(e => path.join(__dirname, '..', '..', 'assets', `help.${e}`)).find(f => fs.existsSync(f));
+        
+        if (own) {
+            file = own;
         }
-    } catch (e) { file = null; }
 
-    if (!file) {
-        // تعذّرت الصورة: القائمة نصًا فقط
-        return api.sendMessage(menuText, event.threadID, (err, info) => {
+        if (!file) {
+            return api.sendMessage(menuText, event.threadID, (err, info) => {
+                if (!err && menuSessions.has(senderID)) menuSessions.get(senderID).messageID = info.messageID;
+            }, event.messageID);
+        }
+
+        api.sendMessage({ body: menuText, attachment: fs.createReadStream(file) }, event.threadID, (err, info) => {
+            if (err) {
+                return api.sendMessage(menuText, event.threadID, (e, i) => {
+                    if (!e && menuSessions.has(senderID)) menuSessions.get(senderID).messageID = i.messageID;
+                }, event.messageID);
+            }
+            if (menuSessions.has(senderID)) menuSessions.get(senderID).messageID = info.messageID;
+        }, event.messageID);
+
+    } catch (e) {
+        api.sendMessage(menuText, event.threadID, (err, info) => {
             if (!err && menuSessions.has(senderID)) menuSessions.get(senderID).messageID = info.messageID;
         }, event.messageID);
     }
-
-    // إرسال رسالة الأقسام مع الصورة
-    return new Promise(resolve => {
-        const stream = fs.createReadStream(file);
-        stream.on('error', () => {});
-        try {
-            api.sendMessage({ body: menuText, attachment: stream }, event.threadID, (err, info) => {
-                if (err) {
-                    return api.sendMessage(menuText, event.threadID, (e, i) => {
-                        if (!e && menuSessions.has(senderID)) menuSessions.get(senderID).messageID = i.messageID;
-                        resolve();
-                    }, event.messageID);
-                }
-                if (menuSessions.has(senderID)) menuSessions.get(senderID).messageID = info.messageID;
-                resolve(info);
-            }, event.messageID);
-        } catch (e) { 
-            api.sendMessage(menuText, event.threadID).then(resolve); 
-        }
-    });
 };
 
 // ═══════════════════════════════════════════════
@@ -141,7 +162,6 @@ module.exports.onMessage = async ({ api, event, helpers, cfg }) => {
     const text = String(event.body || '').trim();
     const senderID = String(event.senderID);
     
-    // التحقق: هل هذه رسالة رد؟ وهل هي رقم؟ وهل لدينا جلسة محفوظة له؟
     if (event.type !== 'message_reply') return false;
     if (!/^\d+$/.test(text)) return false;
     if (!menuSessions.has(senderID)) return false;
@@ -150,17 +170,15 @@ module.exports.onMessage = async ({ api, event, helpers, cfg }) => {
     const index = parseInt(text) - 1;
     const category = session.cats[index];
 
-    if (!category) return false; // رقم غير صحيح
+    if (!category) return false;
 
     const prefix = cfg.getPrefix();
     const catName = catNames[category] || `📁 ${category}`;
     
-    // جلب أوامر هذا القسم فقط
     const cmdsInCat = [...global.client.commands.values()].filter(
         c => c.config.category === category && c.config.name !== 'اوامر'
     );
 
-    // بناء رسالة القسم المختار بنفس الزخرفة
     let catText = `${topBorder}\n`;
     catText += `${botName}\n`;
     catText += `${topBorder}\n\n`;
@@ -176,9 +194,6 @@ module.exports.onMessage = async ({ api, event, helpers, cfg }) => {
     catText += `\n${topBorder}`;
 
     await helpers.reply(api, event, catText);
-    
-    // مسح الجلسة بعد الاستخدام حتى لا تتكرر
     menuSessions.delete(senderID); 
-    
     return true; 
 };
