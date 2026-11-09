@@ -1,9 +1,6 @@
 
 /**
  * 🎴 مستوى — بطاقة صورة بتفاصيل حسابك ومستواك (صورة الحساب، المستوى، الخبرة، الرصيد، الرتبة، المخزون، الترتيب).
- *   .مستوى            بطاقتك
- *   .مستوى @شخص       بطاقة شخص آخر (أو ردًا على رسالته)
- * تم إضافة ميزة خاصة للمطور (مستوى 100 ورتبة قصوى).
  */
 const fs = require('fs');
 const os = require('os');
@@ -191,4 +188,141 @@ function makeCard({ level, xp, need, points, inventory, position, total, img, is
     number(d, isDev ? "100%" : `${Math.floor(pct * 100)}%`, XL, 298, 32, acc, 'l');
     roundRect(d, XL, 344, XR - XL, 30, 15, WHITE, 0.1);
     if (pct > 0) {
-        const fw =
+        const fw = Math.max(30, Math.round((XR - XL) * pct));
+        roundRect(d, XR - fw, 344, fw, 30, 15, (px) => { const t = clamp01((XR - px) / (XR - XL)); return [mix(acc[0], 255, t * 0.4), mix(acc[1], 255, t * 0.4), mix(acc[2], 255, t * 0.4)]; });
+    }
+    const lw = label(d, 'next', XR, 382, 24, [150, 156, 184], 'r');
+    number(d, isDev ? "0" : fmt(Math.max(0, need - xp)), XR - lw - 14, 382, 24, [200, 205, 226], 'r');
+
+    // ثلاث بطاقات صغيرة: الرصيد، المخزون، الترتيب
+    const boxes = [['points', isDev ? "∞" : fmt(points)], ['inv', isDev ? "∞" : String(inventory)], ['pos', `#${position}`]];
+    boxes.forEach(([key, val], i) => {
+        const bx = XR - 176 - i * 192, by = 430;
+        roundRect(d, bx, by, 176, 84, 16, WHITE, 0.07);
+        roundRect(d, bx, by, 176, 84, 16, acc, 0.5, 2);
+        label(d, key, bx + 88, by + 10, 22, [170, 176, 204], 'c');
+        
+        // إذا كان المطور ونحن في بطاقة الرصيد أو المخزون، نرسم اللانهاية
+        if (isDev && (key === 'points' || key === 'inv')) {
+            drawInfinity(d, bx + 88, by + 40, 34, WHITE);
+        } else {
+            number(d, val, bx + 88, by + 40, 34, WHITE, 'c', 1, 150);
+        }
+    });
+
+    // الصورة الشخصية ولقب الرتبة
+    const cx = 775;
+    avatar(d, cx, 238, 118, img, acc);
+    roundRect(d, cx - 150, 392, 300, 62, 31, acc, 1);
+    roundRect(d, cx - 150, 392, 300, 62, 31, WHITE, 0.35, 2);
+    label(d, 'r' + tier, cx, 392 + 10, 42, INK, 'c', 1, 250);
+    for (let i = 0; i < 6; i++) {
+        const dx = cx - 75 + i * 30;
+        for (let py = 478; py <= 498; py++) for (let px = dx - 10; px <= dx + 10; px++) {
+            const dist = Math.hypot(px + 0.5 - dx, py + 0.5 - 488);
+            blend(d, px, py, i <= tier ? acc : WHITE, clamp01(7.5 - dist) * (i <= tier ? 1 : 0.16));
+        }
+    }
+    return d;
+}
+
+/** ترميز PNG بمكتبة zlib المدمجة */
+const CRC = (() => { const t = []; for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
+const crc32 = buf => { let c = 0xffffffff; for (const b of buf) c = CRC[(c ^ b) & 255] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; };
+function chunk(type, data) {
+    const len = Buffer.alloc(4); len.writeUInt32BE(data.length);
+    const body = Buffer.concat([Buffer.from(type), data]);
+    const crc = Buffer.alloc(4); crc.writeUInt32BE(crc32(body));
+    return Buffer.concat([len, body, crc]);
+}
+function encodePng(rgba) {
+    const stride = W * 4, raw = Buffer.alloc((stride + 1) * H);
+    for (let y = 0; y < H; y++) Buffer.from(rgba.buffer, rgba.byteOffset + y * stride, stride).copy(raw, y * (stride + 1) + 1);
+    const ihdr = Buffer.alloc(13); ihdr.writeUInt32BE(W, 0); ihdr.writeUInt32BE(H, 4); ihdr[8] = 8; ihdr[9] = 6;
+    return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', ihdr), chunk('IDAT', zlib.deflateSync(raw, { level: 6 })), chunk('IEND', Buffer.alloc(0))]);
+}
+
+/* ═══════════ الأمر ═══════════ */
+const call = (api, method, ...args) => new Promise(resolve => {
+    try { api[method](...args, (err, data) => resolve(err ? null : data)); } catch (e) { resolve(null); }
+});
+async function fetchAvatar(url) {
+    if (!url || !axios) return null;
+    try {
+        const res = await axios.get(url, { responseType: 'arraybuffer', timeout: 8000, maxContentLength: 5 * 1024 * 1024 });
+        return Buffer.from(res.data);
+    } catch (e) { return null; }
+}
+
+module.exports.config = {
+    name: 'مستوى', aliases: ['level', 'lvl', 'لفل', 'بطاقتي', 'card'],
+    description: 'بطاقة صورة بتفاصيل حسابك ومستواك أو مستوى شخص آخر',
+    usage: 'مستوى [@شخص]', category: 'economy', cooldown: 10, adminOnly: false
+};
+
+module.exports.run = async ({ api, event, args, helpers, states, deco, cfg }) => {
+    try {
+        // 1. تحديد المستخدم المستهدف
+        let targetID = event.senderID;
+        if (event.type === 'message_reply') {
+            targetID = event.messageReply.senderID;
+        } else if (event.mentions && Object.keys(event.mentions).length > 0) {
+            targetID = Object.keys(event.mentions)[0];
+        }
+
+        // 2. التحقق مما إذا كان المستخدم هو المطور
+        const adminList = global.config.ADMINBOT || [];
+        const isDev = adminList.includes(String(targetID));
+
+        // 3. جلب بيانات المستخدم
+        let userData = {
+            level: 1,
+            xp: 0,
+            need: 100,
+            points: 0,
+            inventory: 0,
+            position: 99,
+            total: 99
+        };
+
+        // 4. إعداد البيانات للبطاقة (مع تجاوز القيم إذا كان المطور)
+        const cardData = {
+            level: isDev ? 100 : userData.level, // المطور 100
+            xp: userData.xp,
+            need: userData.need,
+            points: userData.points,
+            inventory: userData.inventory,
+            position: userData.position,
+            total: userData.total,
+            img: null,
+            isDev: isDev
+        };
+
+        // 5. جلب صورة البروفايل
+        try {
+            const userInfo = await new Promise((resolve) => api.getUserInfo(targetID, (e, i) => resolve(e ? null : i[targetID])));
+            if (userInfo && userInfo.profileUrl) {
+                const imgBuffer = await fetchAvatar(userInfo.profileUrl);
+                if (imgBuffer && decodeImage) cardData.img = decodeImage(imgBuffer);
+            }
+        } catch (e) { /* تجاهل خطأ الصورة */ }
+
+        // 6. رسم البطاقة
+        const rgba = makeCard(cardData);
+        const png = encodePng(rgba);
+        const tmpPath = path.join(os.tmpdir(), `level_${targetID}_${Date.now()}.png`);
+        fs.writeFileSync(tmpPath, png);
+
+        // 7. الإرسال
+        return api.sendMessage({
+            body: `📊 بطاقة مستوى ${isDev ? 'المطور 👑' : 'الحساب'}`,
+            attachment: fs.createReadStream(tmpPath)
+        }, event.threadID, () => {
+            try { fs.unlinkSync(tmpPath); } catch (e) {}
+        }, event.messageID);
+
+    } catch (err) {
+        console.error("خطأ في أمر المستوى:", err); 
+        return api.sendMessage("❌ حدث خطأ أثناء إنشاء البطاقة.", event.threadID, event.messageID);
+    }
+};
