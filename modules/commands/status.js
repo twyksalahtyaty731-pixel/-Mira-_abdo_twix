@@ -37,12 +37,11 @@ module.exports.config = {
     adminOnly: false
 };
 
-// دالة لتحويل المللي ثانية إلى وقت مقروء (ساعات ودقائق)
 function msToTime(ms) {
-    let seconds = (ms / 1000).toFixed(0);
-    let minutes = (ms / (1000 * 60)).toFixed(0);
-    let hours = (ms / (1000 * 60 * 60)).toFixed(0);
-    let days = (ms / (1000 * 60 * 60 * 24)).toFixed(0);
+    let seconds = Math.floor(ms / 1000);
+    let minutes = Math.floor(seconds / 60);
+    let hours = Math.floor(minutes / 60);
+    let days = Math.floor(hours / 24);
 
     if (seconds < 60) return seconds + " ثانية";
     else if (minutes < 60) return minutes + " دقيقة";
@@ -50,72 +49,76 @@ function msToTime(ms) {
     else return days + " يوم";
 }
 
-// دالة لإنشاء شريط تقدم (مثل ▰▰▰▱▱)
 function progressBar(percent, length = 12) {
-    const filled = Math.round((percent / 100) * length);
+    const filled = Math.max(0, Math.min(length, Math.round((percent / 100) * length)));
     const empty = length - filled;
     return "▰".repeat(filled) + "▱".repeat(empty);
 }
 
 module.exports.run = async ({ api, event, helpers, cfg }) => {
-    const prefix = cfg.getPrefix();
-    const ping = Math.max(0, Date.now() - Number(event.timestamp || Date.now()));
-    const startTime = global.client.startedAt || global.client.timeStart || Date.now();
-    const up = msToTime(Date.now() - startTime);
-    
-    // الذاكرة
-    const memRss = Math.round(process.memoryUsage().rss / 1048576);
-    const maxMem = 512; // Render default 512MB
-    const memPercent = Math.round((memRss / maxMem) * 100);
+    try {
+        console.log('[UP] 🚀 تم استدعاء الأمر بنجاح.');
 
-    // عدد الأوامر والمستخدمين
-    const cmds = global.client.commands?.size || 0;
-    const usersCount = global.data && global.data.allUserID ? global.data.allUserID.length : 342; 
-    const version = global.config.version || "1.0.0";
+        const prefix = cfg.getPrefix();
+        const ping = Math.max(0, Date.now() - Number(event.timestamp || Date.now()));
+        
+        // جلب وقت التشغيل بأمان
+        const startTime = global.client.startedAt || global.client.timeStart || Date.now();
+        const up = msToTime(Date.now() - startTime);
+        
+        // جلب بيانات الذاكرة
+        const memRss = Math.round(process.memoryUsage().rss / 1048576);
+        const memHeap = Math.round(process.memoryUsage().heapUsed / 1048576);
+        const maxMem = 512; 
+        const memPercent = Math.round((memRss / maxMem) * 100);
 
-    // حالة الاتصال
-    const pingStatus = ping < 200 ? "ممتازة" : (ping < 500 ? "جيدة" : "ضعيفة");
-    const reconnects = global.mqttFailures || 0; 
+        // جلب بيانات البوت بأمان
+        const cmds = global.client.commands?.size || 0;
+        let usersCount = 0;
+        if (global.data && global.data.allUserID) {
+            usersCount = global.data.allUserID.length;
+        }
+        
+        const version = global.config.version || "1.0.0";
+        const pingStatus = ping < 200 ? "ممتازة" : (ping < 500 ? "جيدة" : "ضعيفة");
+        const cloudSync = process.env.SYNC_GITHUB_TOKEN ? "مفعّل ✅" : "غير مفعّل ❌";
+        const nodeVersion = process.version;
+        const platform = os.platform();
 
-    // حالة الحفظ السحابي
-    const cloudSync = process.env.SYNC_GITHUB_TOKEN ? "مفعّل ✅" : "غير مفعّل ❌";
-    
-    // معلومات النظام
-    const nodeVersion = process.version;
-    const platform = os.platform();
+        // ═══════════════════════════════════════════
+        // 🎨 تصميم الرسالة
+        // ═══════════════════════════════════════════
+        const messageBody = 
+`◈ ───『 📡 حالة ريمو 』─── ◈
+◈ ────────────── ◈
+⟪ 🌐 الاتصال ⟫
+🟢 الاستجابة: ~${ping}ms (${pingStatus})
+    ▰▰▰▰▰▰▰▰▰▰▰▰
+🔗 متصل منذ: ${up}
+⏳ مدة التشغيل: ${up}
+🔄 مرات إعادة الاتصال: 0
 
-    // ═══════════════════════════════════════════
-    // 🎨 تصميم الرسالة الجديد (MIRA UP)
-    // ═══════════════════════════════════════════
-    const messageBody = 
+⟪ 📊 البوت ⟫
+📦 الأوامر: ${cmds}
+👥 المستخدمون المسجلون: ${usersCount}
+🔣 البادئة: ${prefix}
+🔖 الإصدار: ${version}
 
-       MIRA UP
+⟪ 🛠️ للمطور ⟫
+🧠 الذاكرة: ${memRss} / ${maxMem} MB (${memPercent}%)
+    ${progressBar(memPercent)}
+🧩 الهيب: ${memHeap} / ${maxMem} MB
+☁️ النسخ السحابي: ${cloudSync}
+🟩 Node ${nodeVersion} • ${platform}
+◈ ────────────── ◈`;
 
-⚡ ─── [ الاتصال ] ─── ⚡
-◾ الاستجابة › ${ping}ms (${pingStatus})
-◾ مدة التشغيل › ${up}
-◾ إعادة الاتصال › ${reconnects}
+        // ═══════════════════════════════════════════
+        // 🖼️ إرسال الصورة إن وُجدت
+        // ═══════════════════════════════════════════
+        const imagePath = findStatusImage();
 
-📊 ─── [ إحصائيات البوت ] ─── 📊
-◾ الأوامر › ${cmds}
-◾ المستخدمين › ${usersCount}
-◾ البادئة › ${prefix}
-◾ الإصدار › ${version}
-
-🖥️ ─── [ النظام ] ─── 🖥️
-◾ الذاكرة › ${memRss} / ${maxMem} MB (${memPercent}%)
-  [ ${progressBar(memPercent)} ]
-◾ Node.js › ${nodeVersion} • ${platform}
-◾ السحابة › ${cloudSync}
-╰─────────────────────╯`;
-
-    // ═══════════════════════════════════════════
-    // 🖼️ إرسال الصورة إن وُجدت
-    // ═══════════════════════════════════════════
-    const imagePath = findStatusImage();
-
-    if (imagePath) {
-        try {
+        if (imagePath) {
+            console.log('[UP] 🖼️ تم العثور على صورة، جاري الإرسال معها...');
             return api.sendMessage(
                 {
                     body: messageBody,
@@ -124,17 +127,19 @@ module.exports.run = async ({ api, event, helpers, cfg }) => {
                 event.threadID,
                 (err) => {
                     if (err) {
-                        console.log('[UP] خطأ في الإرسال مع الصورة:', err);
+                        console.log('[UP] ❌ خطأ في الإرسال مع الصورة:', err);
                         helpers.reply(api, event, messageBody);
                     }
                 },
                 event.messageID
             );
-        } catch (e) {
-            console.log('[UP] استثناء:', e.message);
+        } else {
+            console.log('[UP] 📝 لا توجد صورة، سيتم إرسال النص فقط.');
+            return helpers.reply(api, event, messageBody);
         }
-    }
 
-    // إرسال النص فقط إذا لم توجد صورة
-    return helpers.reply(api, event, messageBody);
+    } catch (error) {
+        console.error('[UP] ❌ حدث خطأ داخلي:', error);
+        return api.sendMessage("❌ حدث خطأ أثناء عرض الحالة.", event.threadID, event.messageID);
+    }
 };
