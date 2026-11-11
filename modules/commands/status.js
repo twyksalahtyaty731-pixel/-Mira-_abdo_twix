@@ -89,7 +89,7 @@ module.exports.run = async ({ api, event, helpers, cfg }) => {
         // 🎨 تصميم الرسالة
         // ═══════════════════════════════════════════
         const messageBody = 
-`◈ ───『 📡 حالة ريمو 』─── ◈
+`◈ ───『 mira up  』─── ◈
 ◈ ────────────── ◈
 ⟪ 🌐 الاتصال ⟫
 🟢 الاستجابة: ~${ping}ms (${pingStatus})
