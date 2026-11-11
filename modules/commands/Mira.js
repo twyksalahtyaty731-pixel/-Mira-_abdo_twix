@@ -11,7 +11,7 @@ module.exports.config = {
 // ═══════════════════════════════════════════════
 // 🔑 المفتاح
 // ═══════════════════════════════════════════════
-const KEY = process.env.GROQ_API_KEY || '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';
+const KEY = process.env.GROQ_API_KEY || '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';
 const BASE = 'https://api.groq.com/openai/v1';
 
 // النماذج التي تعمل حالياً في Groq (بدلاً من النماذج القديمة)
