@@ -15,7 +15,7 @@ module.exports.config = {
 // 🛡️ تم إزالة المفتاح لحمايته من الحظر في GitHub
 // البوت سيقرأه تلقائياً من إعدادات Render (Environment Variables)
 // ═══════════════════════════════════════════════
-const KEY = process.env.GROQ_API_KEY || ''; 
+const KEY = process.env.GROQ_API_KEY || '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'; 
 
 const BASE = 'https://api.groq.com/openai/v1';
 const PREFERRED = ['openai/gpt-oss-120b', 'openai/gpt-oss-20b', 'llama-3.3-70b-versatile', 'llama-3.1-8b-instant'];
