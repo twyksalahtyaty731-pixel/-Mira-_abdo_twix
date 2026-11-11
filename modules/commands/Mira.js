@@ -9,12 +9,12 @@ module.exports.config = {
 };
 
 // ═══════════════════════════════════════════════
-// 🔑 المفتاح
+// 🔑 المفتاح الجديد
 // ═══════════════════════════════════════════════
 const KEY = process.env.GROQ_API_KEY || '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';
 const BASE = 'https://api.groq.com/openai/v1';
 
-// النماذج التي تعمل حالياً في Groq (بدلاً من النماذج القديمة)
+// النماذج التي تعمل حالياً في Groq
 const MODELS = [
     'openai/gpt-oss-120b',
     'qwen/qwen3.6-27b',
@@ -107,10 +107,30 @@ function post(model, messages) {
     return axios.post(`${BASE}/chat/completions`, payload, { headers: headers(), timeout: 30000, validateStatus: () => true });
 }
 
+// 🛡️ دالة إرسال مضمونة للرد المباشر
 const send = (api, text, threadID, replyTo) => new Promise(resolve => {
-    try { api.sendMessage(text, String(threadID), (err, info) => resolve({ err: err || null, info }), replyTo); }
-    catch (e) { resolve({ err: e, info: null }); }
+    try {
+        api.sendMessage({
+            body: text,
+            replyToMessage: replyTo
+        }, String(threadID), (err, info) => resolve({ err: err || null, info }));
+    } catch (e) {
+        try {
+            api.sendMessage(text, String(threadID), (err, info) => resolve({ err: err || null, info }), replyTo);
+        } catch (e2) {
+            resolve({ err: e2, info: null });
+        }
+    }
 });
+
+// ⌨️ دالة إظهار "يكتب الآن" المصلحة
+const showTyping = (api, threadID) => {
+    try {
+        if (typeof api.sendTypingIndicator === 'function') {
+            api.sendTypingIndicator(threadID, () => {});
+        }
+    } catch (e) {}
+};
 
 async function ask({ event, question, cfg, quoted }) {
     const isDev = cfg.isAdmin(String(event.senderID));
@@ -121,7 +141,6 @@ async function ask({ event, question, cfg, quoted }) {
 
     let res;
     try {
-        // تجربة النماذج بالترتيب حتى ينجح أحدها
         for (const model of MODELS) {
             res = await post(model, messages);
             if (res.status === 200) break;
@@ -157,13 +176,10 @@ module.exports.run = async ({ api, event, args, helpers, deco, cfg }) => {
     if (!question) return helpers.reply(api, event, deco.warning(`اكتب سؤالك بعد الأمر.\nمثال: ${cfg.getPrefix()}ميرا ما هي عاصمة السودان؟`));
     if (!KEY) return helpers.reply(api, event, deco.errorBox('لم يتم إعداد مفتاح Groq بعد'));
 
-    // مؤشر الكتابة
-    if (api.sendTypingIndicator) api.sendTypingIndicator(event.threadID, true);
+    showTyping(api, event.threadID);
 
     const r = await ask({ event, question, cfg, quoted: isMiraMsg(event.messageReply && event.messageReply.messageID) ? quoted : '' });
     
-    if (api.sendTypingIndicator) api.sendTypingIndicator(event.threadID, false);
-
     if (r.error) return helpers.reply(api, event, deco.errorBox(r.error));
 
     // الرد كـ Reply على رسالة الشخص
@@ -189,9 +205,8 @@ module.exports.onMessage = async ({ api, event, cfg }) => {
         if (!KEY) return true;
         const question = noPrefixMatch[1].trim();
         
-        if (api.sendTypingIndicator) api.sendTypingIndicator(event.threadID, true);
+        showTyping(api, event.threadID);
         const r = await ask({ event, question, cfg });
-        if (api.sendTypingIndicator) api.sendTypingIndicator(event.threadID, false);
 
         if (r.error) {
             return api.sendMessage(`❌ ${r.error}`, event.threadID, event.messageID);
@@ -213,9 +228,8 @@ module.exports.onMessage = async ({ api, event, cfg }) => {
     if (lastAuto.size > 500) for (const [k, t] of lastAuto) if (now - t > 60000) lastAuto.delete(k);
     if (!KEY) return true;
 
-    if (api.sendTypingIndicator) api.sendTypingIndicator(event.threadID, true);
+    showTyping(api, event.threadID);
     const r = await ask({ event, question: text, cfg, quoted: event.messageReply.body });
-    if (api.sendTypingIndicator) api.sendTypingIndicator(event.threadID, false);
 
     if (r.error) return true;
     
