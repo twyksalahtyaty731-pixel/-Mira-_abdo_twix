@@ -1,17 +1,5 @@
 /**
  * .تحميل <رابط> — يحمّل الفيديو/الصوت/الصورة من أي رابط ويرسله
- * (انستغرام، تيك توك، فيسبوك، يوتيوب، تويتر، ساوندكلاود، وروابط الملفات المباشرة وغيرها مما يدعمه yt-dlp).
- * أو ردّ على رسالة تحتوي رابطًا بـ .تحميل
- *
- * الحدود (يمكن تغييرها بمتغيرات البيئة):
- *   DL_MAX_MB  الحجم الأقصى بالميجا (الافتراضي 100)
- *   DL_MAX_MIN المدة القصوى بالدقائق (الافتراضي 60)
- *   DL_TIMEOUT_MS مهلة التحميل (الافتراضي 10 دقائق)
- * إن فشل إرسال ملف أكبر من 25 ميجا (حد ماسنجر الآمن) يعيد البوت التحميل بجودة أقل تلقائيًا.
- *
- * انستغرام وبعض المواقع تطلب تسجيل دخول: ضع كوكيز بصيغة Netscape في Heba_DB/ytdlp_cookies.txt
- * أو في متغير البيئة YTDLP_COOKIES.
- * تحميل الجودة العالية في يوتيوب (فيديو وصوت منفصلان) يحتاج ffmpeg على الخادم، وبدونه يُحمَّل ملف جاهز بجودة أقل.
  */
 const fs = require('fs');
 const os = require('os');
@@ -30,11 +18,12 @@ const MAX_MB = num('DL_MAX_MB', 100), MAX_MIN = num('DL_MAX_MIN', 60), TIMEOUT_M
 const SAFE_MB = 25, MAX_PARALLEL = 2;
 let running = 0;
 
+const delay = ms => new Promise(res => setTimeout(res, ms));
+
 let ffmpegOk = null;
 const hasFfmpeg = () => ffmpegOk !== null ? Promise.resolve(ffmpegOk)
     : new Promise(r => execFile('ffmpeg', ['-version'], { timeout: 10000 }, e => { ffmpegOk = !e; r(ffmpegOk); }));
 
-/** من الأفضل للأقل: دمج فيديو+صوت (إن وُجد ffmpeg) ثم ملف واحد جاهز، وأخيرًا أي صيغة متاحة (صوت، فيديو بصيغة أخرى...) */
 function formatFor(limitMB, merge) {
     const L = `${limitMB}M`, f = [];
     if (merge) for (const h of [1080, 720, 480]) f.push(`bv*[height<=${h}][filesize<${L}]+ba`, `bv*[height<=${h}][filesize_approx<${L}]+ba`);
@@ -43,7 +32,6 @@ function formatFor(limitMB, merge) {
     return f.join('/');
 }
 
-/** كوكيز اختيارية لـ yt-dlp (انستغرام وغيره) */
 function cookiesArg() {
     try {
         let file = path.join(__dirname, '..', '..', 'Heba_DB', 'ytdlp_cookies.txt');
@@ -57,7 +45,6 @@ function cookiesArg() {
 
 const extractUrl = text => { const m = String(text || '').match(/https?:\/\/[^\s<>"']+/i); return m ? m[0].replace(/[)\].,،]+$/, '') : null; };
 
-/** يمنع الروابط المحلية/الداخلية (حماية من SSRF) */
 function isSafeUrl(u) {
     let url; try { url = new URL(u); } catch (e) { return false; }
     if (!/^https?:$/.test(url.protocol)) return false;
@@ -90,9 +77,8 @@ function friendlyError(stderr, timedOut) {
 const MB = 1024 * 1024;
 const IMG_URL = /\.(jpe?g|png|gif|webp)(\?|#|$)/i;
 const listFiles = id => fs.readdirSync(os.tmpdir()).filter(f => f.startsWith(`kira-dl-${id}.`) && !f.endsWith('.part')).map(f => path.join(os.tmpdir(), f));
-const cleanup = id => { try { for (const f of fs.readdirSync(os.tmpdir())) if (f.startsWith(`kira-dl-${id}.`)) fs.unlinkSync(path.join(os.tmpdir(), f)); } catch (e) { /* تجاهل */ } };
+const cleanup = id => { try { for (const f of fs.readdirSync(os.tmpdir())) if (f.startsWith(`kira-dl-${id}.`)) fs.unlinkSync(path.join(os.tmpdir(), f)); } catch (e) { } };
 
-/** رابط صورة مباشر: ننزّله بلا yt-dlp */
 async function fetchImage(url, prefix) {
     const res = await axios.get(url, { responseType: 'arraybuffer', timeout: 30000, maxContentLength: SAFE_MB * MB, maxRedirects: 5 });
     const ext = (new URL(url).pathname.match(/\.(jpe?g|png|gif|webp)$/i) || [, 'jpg'])[1].toLowerCase();
@@ -103,7 +89,7 @@ async function fetchImage(url, prefix) {
 
 const send = (api, event, body, file) => new Promise(resolve => {
     const stream = fs.createReadStream(file);
-    stream.on('error', () => {}); // لا نُسقط البوت إن حُذف الملف أثناء القراءة
+    stream.on('error', () => {}); 
     try { api.sendMessage({ body, attachment: stream }, event.threadID, e => resolve(!e), event.messageID); }
     catch (e) { resolve(false); }
 });
@@ -120,23 +106,53 @@ module.exports.run = async ({ api, event, args, helpers, deco, cfg }) => {
     running++;
     const id = `${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
     const prefix = path.join(os.tmpdir(), `kira-dl-${id}`);
-    let wait = null;
-    const dropWait = () => { if (wait && wait.messageID && typeof api.unsendMessage === 'function') api.unsendMessage(String(wait.messageID), () => {}); };
+    
+    // ═══════════════════════════════════════════════
+    // 🟢 نظام شريط التحميل (Fake Progress)
+    // ═══════════════════════════════════════════════
+    let msgID = null;
+    
+    const updateProgress = async (text) => {
+        if (!msgID) {
+            await new Promise(resolve => {
+                api.sendMessage(text, event.threadID, (err, info) => {
+                    if (info && info.messageID) msgID = info.messageID;
+                    resolve();
+                });
+            });
+        } else {
+            try { api.editMessage(text, msgID); } catch(e) {}
+        }
+    };
+
+    const dropProgress = () => {
+        if (msgID && typeof api.unsendMessage === 'function') {
+            try { api.unsendMessage(String(msgID), () => {}); } catch(e) {}
+        }
+    };
+
     try {
-        wait = await reply(deco.infoBox('⏳ التحميل', 'جاري التحميل... قد يستغرق بضع دقائق للفيديوهات الطويلة'));
+        await updateProgress("LOADING ▱▱▱▱▱ 0%\n⏳ جاري تجهيز التحميل...");
 
         // صورة مباشرة
         let direct = null;
         try { direct = IMG_URL.test(new URL(url).pathname + new URL(url).search) ? await fetchImage(url, prefix) : null; } catch (e) { direct = null; }
         if (direct) {
+            await updateProgress("LOADING ▰▰▰▰▰ 100%\n✅ تم التحميل! جاري الإرسال...");
+            await delay(500);
             const ok = await send(api, event, '🖼️ تم التحميل', direct);
-            if (ok) dropWait(); else await reply(deco.errorBox('تعذّر إرسال الصورة'));
+            if (ok) dropProgress(); else await reply(deco.errorBox('تعذّر إرسال الصورة'));
             return;
         }
 
+        await updateProgress("LOADING ▰▱▱▱▱ 20%\n🔍 جاري استخراج البيانات...");
+
         let bin;
         try { bin = await require('../../utils/ytdlp').ensure(); }
-        catch (e) { return reply(deco.errorBox('تعذّر تجهيز أداة التحميل على الخادم، حاول لاحقًا')); }
+        catch (e) { 
+            dropProgress();
+            return reply(deco.errorBox('تعذّر تجهيز أداة التحميل على الخادم، حاول لاحقًا')); 
+        }
         const merge = await hasFfmpeg();
         const cookies = cookiesArg();
 
@@ -144,6 +160,9 @@ module.exports.run = async ({ api, event, args, helpers, deco, cfg }) => {
         for (let i = 0; i < limits.length; i++) {
             const limit = limits[i], last = i === limits.length - 1;
             cleanup(id);
+            
+            await updateProgress("LOADING ▰▰▱▱▱ 50%\n📥 جاري تحميل الملف من الخادم...");
+
             const { err, stdout, stderr } = await runYtdlp(bin, [
                 '--no-playlist', '--no-warnings', '--restrict-filenames', '--socket-timeout', '30',
                 '--max-filesize', `${limit}M`, '--match-filter', `!is_live & duration<=?${MAX_MIN * 60}`,
@@ -151,20 +170,37 @@ module.exports.run = async ({ api, event, args, helpers, deco, cfg }) => {
                 '-o', `${prefix}.%(ext)s`, '--print', '%(title).70s', '--no-simulate',
                 '--', url
             ]);
+            
             const file = listFiles(id)[0] || null;
 
             if (!file) {
+                dropProgress();
                 if (!err && /larger than max-filesize|too large/i.test(stderr + stdout)) return reply(deco.warning(`الملف أكبر من ${limit} ميجا`));
                 return reply(deco.errorBox(err ? friendlyError(stderr, err.killed) : `الملف أكبر من ${limit} ميجا أو لا يمكن تحميله`));
             }
+            
             const size = fs.statSync(file).size;
-            if (size > limit * MB) return reply(deco.warning(`الملف أكبر من ${limit} ميجا`));
+            if (size > limit * MB) {
+                dropProgress();
+                return reply(deco.warning(`الملف أكبر من ${limit} ميجا`));
+            }
+
+            await updateProgress("LOADING ▰▰▰▰▱ 80%\n🔄 جاري المعالجة النهائية...");
+            await delay(1000); // تأخير بسيط لإعطاء إحساس بالمعالجة
 
             const title = stdout.split('\n').map(s => s.trim()).filter(Boolean)[0] || 'تم التحميل';
-            if (await send(api, event, `🎬 ${title}`, file)) { dropWait(); return; }
+            
+            await updateProgress("LOADING ▰▰▰▰▰ 100%\n✅ اكتمل التحميل! جاري الإرسال الآن...");
+            await delay(800); // انتظار بسيط قبل إرسال الفيديو
 
-            // فشل الإرسال: إن كان الملف أكبر من حد ماسنجر الآمن نعيد بجودة أقل، وإلا نبلّغ
+            if (await send(api, event, `🎬 ${title}`, file)) { 
+                dropProgress(); 
+                return; 
+            }
+
             if (size > SAFE_MB * MB && !last) continue;
+            
+            dropProgress();
             return reply(deco.errorBox(size > SAFE_MB * MB
                 ? `تعذّر إرسال الملف (${Math.round(size / MB)} ميجا) لأن ماسنجر رفضه`
                 : 'تعذّر إرسال الملف (ربما بصيغة غير مدعومة)'));
