@@ -4,8 +4,9 @@
 
 const HEADER = '⋆ 𝙈𝙄𝙍𝘼 ⋆';
 const LINE = '┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈';
-const EXPIRE = 30 * 60 * 1000;
+const EXPIRE = 30 * 60 * 1000; // صلاحية القائمة 30 دقيقة
 
+// لحفظ الجلسات المعلقة: "threadID:senderID" -> { ids, time, messageID }
 const waiting = new Map();
 
 module.exports.config = {
@@ -29,21 +30,36 @@ const getNames = (api, ids) => new Promise(resolve => {
     } catch (e) { resolve({}); }
 });
 
-// دالة قبول الطلبات
+// ═══════════════════════════════════════════════
+// 🛠️ دالة القبول (تستخدم acceptUsersToGroup أولاً)
+// ═══════════════════════════════════════════════
 const addUser = (api, userID, threadID) => new Promise((resolve) => {
+    // 1. محاولة استخدام الدالة المخصصة لقبول الطلبات
     if (typeof api.acceptUsersToGroup === 'function') {
         api.acceptUsersToGroup([String(userID)], String(threadID), (err) => {
             if (err) {
-                api.addUserToGroup(String(userID), String(threadID), (err2) => resolve(err2 || null));
+                console.log(`[طلبات] ⚠️ acceptUsersToGroup فشلت للعضو ${userID}، سنجرب addUserToGroup...`, err);
+                // 2. إذا فشلت، نجرب الإضافة العادية
+                api.addUserToGroup(String(userID), String(threadID), (err2) => {
+                    if (err2) console.log(`[طلبات] ❌ addUserToGroup فشلت أيضاً:`, JSON.stringify(err2, null, 2));
+                    resolve(err2 || null);
+                });
             } else {
+                console.log(`[طلبات] ✅ acceptUsersToGroup نجحت للعضو ${userID}`);
                 resolve(null);
             }
         });
     } else {
-        api.addUserToGroup(String(userID), String(threadID), (err) => resolve(err || null));
+        // إذا كانت الدالة غير موجودة في هذه النسخة من المكتبة
+        console.log(`[طلبات] ⚠️ acceptUsersToGroup غير مدعومة، جاري استخدام addUserToGroup...`);
+        api.addUserToGroup(String(userID), String(threadID), (err) => {
+            if (err) console.log(`[طلبات] ❌ addUserToGroup فشلت:`, JSON.stringify(err, null, 2));
+            resolve(err || null);
+        });
     }
 });
 
+// تحويل الأرقام العربية (١٢٣) إلى إنجليزية
 const normalizeDigits = s => String(s || '')
     .replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d))
     .replace(/[۰-۹]/g, d => '۰۱۲۳۴۵۶۷۸۹'.indexOf(d));
@@ -72,6 +88,9 @@ function buildList(info, queue, names) {
     return body;
 }
 
+// ═══════════════════════════════════════════════
+// 🚀 تشغيل الأمر
+// ═══════════════════════════════════════════════
 module.exports.run = async ({ api, event, cfg }) => {
     const { threadID, senderID } = event;
 
@@ -92,16 +111,20 @@ module.exports.run = async ({ api, event, cfg }) => {
                     time: Date.now(),
                     messageID: String(msgInfo.messageID)
                 });
+                console.log(`[طلبات] ✅ تم إرسال القائمة وحفظ الجلسة: ${msgInfo.messageID}`);
             }
         });
     } catch (e) {
         console.log('[طلبات] ❌', e);
-        api.sendMessage(`${HEADER}\n${LINE}\n❌ تعذر جلب الطلبات`, threadID);
+        api.sendMessage(`${HEADER}\n${LINE}\n❌ تعذر جلب الطلبات\n${e.error || e.message || e}`, threadID);
     }
 };
 
+// ═══════════════════════════════════════════════
+// 📩 استقبال الردود (عندما يرد المطور برقم أو الكل)
+// ═══════════════════════════════════════════════
 module.exports.onMessage = async ({ api, event, cfg }) => {
-    // 1. التأكد من أن الرسالة هي "رد"
+    // 1. التأكد من أن الرسالة هي "رد" (Reply)
     if (event.type !== 'message_reply' || !event.messageReply) return false;
 
     const key = `${event.threadID}:${event.senderID}`;
@@ -116,9 +139,7 @@ module.exports.onMessage = async ({ api, event, cfg }) => {
         return false;
     }
 
-    // ═══════════════════════════════════════════════
-    // 👇 التعديل الجديد: لا نشترط التطابق الدقيق للرسالة، يكفي أنه يرد على البوت
-    // ═══════════════════════════════════════════════
+    // 4. التأكد من أن الشخص يرد على رسالة البوت
     const repliedSender = String(event.messageReply.senderID);
     const botID = String(api.getCurrentUserID());
     if (repliedSender !== botID) return false;
@@ -139,6 +160,7 @@ module.exports.onMessage = async ({ api, event, cfg }) => {
         return false; // ليس رقماً ولا كلمة "الكل"
     }
 
+    // التحقق من الصلاحية مرة أخرى قبل التنفيذ
     try {
         const info = await getInfo(api, event.threadID);
         if (!isAllowed(info, cfg, event.senderID)) {
@@ -150,19 +172,21 @@ module.exports.onMessage = async ({ api, event, cfg }) => {
     const failed = [];
     let lastErr = null;
 
+    // تنفيذ القبول
     for (const id of targets) {
         const err = await addUser(api, id, event.threadID);
         if (err) {
             failed.push(id);
             lastErr = err;
-            console.log(`[طلبات] ❌ فشل قبول ${id}:`, err.error || err.message || err);
         } else {
             ok++;
             console.log(`[طلبات] ✅ تم قبول ${id} بنجاح`);
         }
-        await new Promise(r => setTimeout(r, 2000));
+        // تأخير بين كل إضافة وآخر لتجنب حظر فيسبوك
+        await new Promise(r => setTimeout(r, 2500));
     }
 
+    // بناء رسالة النتيجة
     let body = `${HEADER}\n${LINE}\n✦ نتيجة القبول ✦\n${LINE}\n✅ تم قبول: ${ok}\n`;
     if (failed.length) {
         body += `❌ فشل: ${failed.length}\n`;
@@ -174,6 +198,7 @@ module.exports.onMessage = async ({ api, event, cfg }) => {
     }
     api.sendMessage(body, event.threadID, event.messageID);
 
+    // تحديث الجلسة (إزالة من تم قبولهم)
     entry.ids = entry.ids.filter(id => failed.includes(id) || !targets.includes(id));
     if (!entry.ids.length) {
         waiting.delete(key);
