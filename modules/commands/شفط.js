@@ -72,7 +72,7 @@ ${LINE}`
         all[tid] = { on: true };
         writeAll(all);
         
-        // التحقق من أن البوت أدمن (لإعلام المطور)
+        // التحقق من أن البوت أدمن
         const info = await getInfo(api, tid);
         const botIsAdmin = isGroupAdmin(info, api.getCurrentUserID());
         const warn = (!botIsAdmin) ? '\n⚠️ تنبيه: البوت ليس أدمن، قد لا يستطيع إرجاع الأعضاء.' : '';
@@ -92,9 +92,9 @@ ${LINE}`
 // ═══════════════════════════════════════════════
 // 👁️ مراقبة الأحداث (يستدعى تلقائياً من main.js)
 // ═══════════════════════════════════════════════
-const recent = new Map(); // منع التكرار السريع
-const noticed = new Map(); // منع تكرار الرسائل
-const readds = new Map(); // الحد الأقصى للإعادة (3 مرات في الساعة)
+const recent = new Map(); 
+const noticed = new Map(); 
+const readds = new Map(); 
 const MAX_READD_PER_HOUR = 3;
 
 const guard = (map, key, ms) => {
@@ -123,12 +123,12 @@ module.exports.onEvent = async ({ api, event, helpers }) => {
     if (!st || !st.on) return; // الأمر غير مفعل في هذه المجموعة
 
     const data = event.logMessageData || {};
-    const left = String(data.leftParticipantFbId || '');
+    const left = String(data.leftParticipantFbId || data.unsubscribedParticipantFbId || '');
     
     // تجاهل إذا كان البوت نفسه هو من خرج
     if (!left || left === String(api.getCurrentUserID())) return;
     
-    // تجاهل إذا تم طرد العضو بواسطة أدمن (نرجّع فقط من يخرج بنفسه)
+    // تجاهل إذا تم طرد العضو بواسطة أدمن
     const author = String(event.author || '');
     if (author && author !== left) return;
 
@@ -145,7 +145,17 @@ module.exports.onEvent = async ({ api, event, helpers }) => {
 
     await sleep(1500); // انتظار بسيط قبل الإضافة
 
-    const err = await call(cb => api.addUserToGroup(left, tid, cb));
+    // ═══════════════════════════════════════════════
+    // 🛠️ إضافة العضو (وضع الآيدي داخل مصفوفة)
+    // ═══════════════════════════════════════════════
+    const err = await call(cb => {
+        if (typeof api.addUserToGroup === 'function') {
+            api.addUserToGroup([String(left)], String(tid), cb);
+        } else {
+            cb(new Error('addUserToGroup not found'));
+        }
+    });
+
     if (err) {
         console.log(`[شقط] ❌ تعذّرت إعادة ${left} (${(err && (err.error || err.message)) || err})`);
         if (guard(noticed, `${tid}:fail:${left}`, 30000)) {
@@ -155,16 +165,20 @@ module.exports.onEvent = async ({ api, event, helpers }) => {
     }
 
     // نجحت الإعادة
+    console.log(`[شقط] ✅ تم إرجاع العضو ${left} إلى المجموعة.`);
+    
     let name = '';
     try { name = String(await helpers.getName(api, left) || '').trim(); } catch (e) {}
 
     if (guard(noticed, `${tid}:success:${left}`, 10000)) {
+        // 👇 تمت إضافة العبارة المطلوبة هنا
         const body = 
 `${HEADER}
 ${LINE}
 🛡️ تم الشفط بنجاح!
 👤 العضو: ${name ? `@${name}` : 'عضو'}
 🔒 السبب: غادر المجموعة بنفسه
+💬 لا تطلع ي مز😉
 ${LINE}`;
         
         try {
