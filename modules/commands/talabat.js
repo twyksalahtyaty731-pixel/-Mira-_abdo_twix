@@ -1,12 +1,14 @@
 // ═══════════════════════════════════════════════
 // 📥 أمر الطلبات: عرض طلبات الانضمام وقبولها بالرد
 // الاستخدام: .طلبات  ثم الرد على رسالة البوت برقم الشخص أو «الكل»
+// للمطور وأدمن المجموعة فقط
 // ═══════════════════════════════════════════════
 
 const HEADER = '⋆ 𝙈𝙄𝙍𝘼 ⋆';
 const LINE = '┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈';
+const EXPIRE = 30 * 60 * 1000; // صلاحية القائمة 30 دقيقة
 
-// رسائل القائمة المنتظرة للرد: messageID -> { threadID, senderID, ids }
+// القوائم المنتظرة للرد: "threadID:senderID" -> { ids, time }
 const waiting = new Map();
 
 module.exports.config = {
@@ -19,17 +21,16 @@ module.exports.config = {
     adminOnly: false
 };
 
+// ───────── دوال مساعدة ─────────
 const getInfo = (api, threadID) => new Promise((resolve, reject) => {
     api.getThreadInfo(threadID, (err, info) => err ? reject(err) : resolve(info));
 });
 
 const getNames = (api, ids) => new Promise(resolve => {
     if (!ids.length) return resolve({});
-    api.getUserInfo(ids, (err, data) => resolve(err ? {} : data));
-});
-
-const send = (api, body, threadID, replyTo) => new Promise(resolve => {
-    api.sendMessage(body, threadID, (err, info) => resolve(err ? null : info), replyTo);
+    try {
+        api.getUserInfo(ids, (err, data) => resolve(err ? {} : (data || {})));
+    } catch (e) { resolve({}); }
 });
 
 const addUser = (api, userID, threadID) => new Promise(resolve => {
@@ -37,6 +38,17 @@ const addUser = (api, userID, threadID) => new Promise(resolve => {
         api.addUserToGroup(String(userID), String(threadID), err => resolve(err || null));
     } catch (e) { resolve(e); }
 });
+
+// تحويل الأرقام العربية (١٢٣) إلى إنجليزية
+const normalizeDigits = s => String(s || '')
+    .replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d))
+    .replace(/[۰-۹]/g, d => '۰۱۲۳۴۵۶۷۸۹'.indexOf(d));
+
+const isAllowed = (info, cfg, senderID) => {
+    const isDev = !!(cfg && cfg.isAdmin && cfg.isAdmin(String(senderID)));
+    const isGroupAdmin = (info.adminIDs || []).some(a => String(a.id || a) === String(senderID));
+    return isDev || isGroupAdmin;
+};
 
 function buildList(info, queue, names) {
     let body = `${HEADER}\n${LINE}\n✦ طلبات الانضمام ✦\n${LINE}\n`;
@@ -56,48 +68,49 @@ function buildList(info, queue, names) {
     return body;
 }
 
-module.exports.run = async ({ api, event, helpers, cfg }) => {
+// ───────── الأمر ─────────
+module.exports.run = async ({ api, event, cfg }) => {
     const { threadID, senderID } = event;
 
     try {
         const info = await getInfo(api, threadID);
-        const isDev = cfg && cfg.isAdmin && cfg.isAdmin(String(senderID));
-        const isGroupAdmin = (info.adminIDs || []).some(a => String(a.id || a) === String(senderID));
-        if (!isDev && !isGroupAdmin) {
+
+        if (!isAllowed(info, cfg, senderID)) {
             return api.sendMessage(`${HEADER}\n${LINE}\n⛔ هذا الأمر للأدمن فقط`, threadID);
         }
 
         const queue = info.approvalQueue || [];
         const names = await getNames(api, queue.map(q => String(q.requesterID)));
-        const sent = await send(api, buildList(info, queue, names), threadID);
 
-        if (sent && queue.length) {
-            waiting.set(sent.messageID, {
-                threadID: String(threadID),
-                senderID: String(senderID),
-                ids: queue.map(q => String(q.requesterID)),
-                names
-            });
-        }
+        waiting.set(`${threadID}:${senderID}`, {
+            ids: queue.map(q => String(q.requesterID)),
+            time: Date.now()
+        });
+
+        api.sendMessage(buildList(info, queue, names), threadID);
     } catch (e) {
+        console.log('[طلبات] ❌', e);
         api.sendMessage(`${HEADER}\n${LINE}\n❌ تعذر جلب الطلبات\n${e.error || e.message || e}`, threadID);
     }
 };
 
-// ═══════════════════════════════════════════════
-// ↩️ معالجة الرد على القائمة
-// ═══════════════════════════════════════════════
-module.exports.onEvent = async ({ api, event }) => {
-    if (event.type !== 'message_reply' || !event.messageReply) return;
+// ───────── معالجة الرد ─────────
+module.exports.onEvent = async ({ api, event, cfg }) => {
+    if (event.type !== 'message_reply') return;
 
-    const entry = waiting.get(event.messageReply.messageID);
+    const key = `${event.threadID}:${event.senderID}`;
+    const entry = waiting.get(key);
     if (!entry) return;
-    if (String(event.threadID) !== entry.threadID) return;
-    if (String(event.senderID) !== entry.senderID) return;
 
-    const text = String(event.body || '').trim();
+    if (Date.now() - entry.time > EXPIRE) {
+        waiting.delete(key);
+        return;
+    }
+
+    const text = normalizeDigits(event.body).trim();
+    console.log('[طلبات] رد:', text, '| القائمة:', entry.ids.length);
+
     let targets = [];
-
     if (text === 'الكل') {
         targets = entry.ids;
     } else if (/^\d+$/.test(text)) {
@@ -110,21 +123,38 @@ module.exports.onEvent = async ({ api, event }) => {
         return;
     }
 
+    // تحقق من الصلاحية مرة أخرى
+    try {
+        const info = await getInfo(api, event.threadID);
+        if (!isAllowed(info, cfg, event.senderID)) return;
+    } catch (e) { return; }
+
     let ok = 0;
     const failed = [];
+    let lastErr = null;
+
     for (const id of targets) {
         const err = await addUser(api, id, event.threadID);
-        if (err) failed.push(id);
-        else ok++;
+        if (err) {
+            failed.push(id);
+            lastErr = err;
+            console.log(`[طلبات] ❌ فشل قبول ${id}:`, err.error || err.message || err);
+        } else {
+            ok++;
+            console.log(`[طلبات] ✅ تم قبول ${id}`);
+        }
         await new Promise(r => setTimeout(r, 1500));
     }
 
     let body = `${HEADER}\n${LINE}\n✦ نتيجة القبول ✦\n${LINE}\n✅ تم قبول: ${ok}\n`;
     if (failed.length) {
         body += `❌ فشل: ${failed.length}\n`;
+        body += `السبب: ${(lastErr && (lastErr.error || lastErr.message)) || 'غير معروف'}\n`;
         body += '(تأكد أن البوت أدمن في المجموعة)\n';
     }
     api.sendMessage(body, event.threadID);
 
-    if (!failed.length) waiting.delete(event.messageReply.messageID);
+    // إزالة من تم قبولهم من القائمة المنتظرة
+    entry.ids = entry.ids.filter(id => failed.includes(id) || !targets.includes(id));
+    if (!entry.ids.length) waiting.delete(key);
 };
