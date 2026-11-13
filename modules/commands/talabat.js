@@ -1,14 +1,11 @@
 // ═══════════════════════════════════════════════
 // 📥 أمر الطلبات: عرض طلبات الانضمام وقبولها بالرد
-// الاستخدام: .طلبات  ثم الرد على رسالة البوت برقم الشخص أو «الكل»
-// للمطور وأدمن المجموعة فقط
 // ═══════════════════════════════════════════════
 
 const HEADER = '⋆ 𝙈𝙄𝙍𝘼 ⋆';
 const LINE = '┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈';
-const EXPIRE = 30 * 60 * 1000; // صلاحية القائمة 30 دقيقة
+const EXPIRE = 30 * 60 * 1000;
 
-// القوائم المنتظرة للرد: "threadID:senderID" -> { ids, time, messageID }
 const waiting = new Map();
 
 module.exports.config = {
@@ -21,7 +18,6 @@ module.exports.config = {
     adminOnly: false
 };
 
-// ───────── دوال مساعدة ─────────
 const getInfo = (api, threadID) => new Promise((resolve, reject) => {
     api.getThreadInfo(threadID, (err, info) => err ? reject(err) : resolve(info));
 });
@@ -33,13 +29,21 @@ const getNames = (api, ids) => new Promise(resolve => {
     } catch (e) { resolve({}); }
 });
 
-const addUser = (api, userID, threadID) => new Promise(resolve => {
-    try {
-        api.addUserToGroup(String(userID), String(threadID), err => resolve(err || null));
-    } catch (e) { resolve(e); }
+// دالة قبول الطلبات
+const addUser = (api, userID, threadID) => new Promise((resolve) => {
+    if (typeof api.acceptUsersToGroup === 'function') {
+        api.acceptUsersToGroup([String(userID)], String(threadID), (err) => {
+            if (err) {
+                api.addUserToGroup(String(userID), String(threadID), (err2) => resolve(err2 || null));
+            } else {
+                resolve(null);
+            }
+        });
+    } else {
+        api.addUserToGroup(String(userID), String(threadID), (err) => resolve(err || null));
+    }
 });
 
-// تحويل الأرقام العربية (١٢٣) إلى إنجليزية
 const normalizeDigits = s => String(s || '')
     .replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d))
     .replace(/[۰-۹]/g, d => '۰۱۲۳۴۵۶۷۸۹'.indexOf(d));
@@ -68,7 +72,6 @@ function buildList(info, queue, names) {
     return body;
 }
 
-// ───────── الأمر ─────────
 module.exports.run = async ({ api, event, cfg }) => {
     const { threadID, senderID } = event;
 
@@ -82,7 +85,6 @@ module.exports.run = async ({ api, event, cfg }) => {
         const queue = info.approvalQueue || [];
         const names = await getNames(api, queue.map(q => String(q.requesterID)));
 
-        // إرسال القائمة وحفظ الـ messageID الخاص بها
         api.sendMessage(buildList(info, queue, names), threadID, (err, msgInfo) => {
             if (!err && msgInfo && msgInfo.messageID) {
                 waiting.set(`${threadID}:${senderID}`, {
@@ -90,37 +92,39 @@ module.exports.run = async ({ api, event, cfg }) => {
                     time: Date.now(),
                     messageID: String(msgInfo.messageID)
                 });
-                console.log(`[طلبات] ✅ تم إرسال القائمة وحفظ الجلسة: ${msgInfo.messageID}`);
             }
         });
     } catch (e) {
         console.log('[طلبات] ❌', e);
-        api.sendMessage(`${HEADER}\n${LINE}\n❌ تعذر جلب الطلبات\n${e.error || e.message || e}`, threadID);
+        api.sendMessage(`${HEADER}\n${LINE}\n❌ تعذر جلب الطلبات`, threadID);
     }
 };
 
-// ───────── معالجة الرد (تم التعديل إلى onMessage) ─────────
 module.exports.onMessage = async ({ api, event, cfg }) => {
-    // 1️⃣ التأكد من أن الرسالة هي "رد" (Reply)
+    // 1. التأكد من أن الرسالة هي "رد"
     if (event.type !== 'message_reply' || !event.messageReply) return false;
 
     const key = `${event.threadID}:${event.senderID}`;
     const entry = waiting.get(key);
     
-    // 2️⃣ التأكد من وجود جلسة معلقة لهذا الشخص
+    // 2. إذا لم تكن هناك جلسة معلقة لهذا الشخص، نتجاهل
     if (!entry) return false;
 
-    // 3️⃣ التأكد من أن الشخص يرد على رسالة القائمة نفسها (وليس أي رسالة أخرى)
-    if (String(event.messageReply.messageID) !== String(entry.messageID)) return false;
-
-    // 4️⃣ التحقق من انتهاء الصلاحية
+    // 3. التحقق من انتهاء الصلاحية
     if (Date.now() - entry.time > EXPIRE) {
         waiting.delete(key);
         return false;
     }
 
+    // ═══════════════════════════════════════════════
+    // 👇 التعديل الجديد: لا نشترط التطابق الدقيق للرسالة، يكفي أنه يرد على البوت
+    // ═══════════════════════════════════════════════
+    const repliedSender = String(event.messageReply.senderID);
+    const botID = String(api.getCurrentUserID());
+    if (repliedSender !== botID) return false;
+
     const text = normalizeDigits(event.body).trim();
-    console.log(`[طلبات] 📩 تم استلام رد: "${text}" | القائمة: ${entry.ids.length} طلب`);
+    console.log(`[طلبات] 📩 رد مستلم من الأدمن: "${text}"`);
 
     let targets = [];
     if (text === 'الكل') {
@@ -135,7 +139,6 @@ module.exports.onMessage = async ({ api, event, cfg }) => {
         return false; // ليس رقماً ولا كلمة "الكل"
     }
 
-    // تحقق من الصلاحية مرة أخرى
     try {
         const info = await getInfo(api, event.threadID);
         if (!isAllowed(info, cfg, event.senderID)) {
@@ -155,27 +158,28 @@ module.exports.onMessage = async ({ api, event, cfg }) => {
             console.log(`[طلبات] ❌ فشل قبول ${id}:`, err.error || err.message || err);
         } else {
             ok++;
-            console.log(`[طلبات] ✅ تم قبول ${id}`);
+            console.log(`[طلبات] ✅ تم قبول ${id} بنجاح`);
         }
-        await new Promise(r => setTimeout(r, 1500));
+        await new Promise(r => setTimeout(r, 2000));
     }
 
     let body = `${HEADER}\n${LINE}\n✦ نتيجة القبول ✦\n${LINE}\n✅ تم قبول: ${ok}\n`;
     if (failed.length) {
         body += `❌ فشل: ${failed.length}\n`;
-        body += `السبب: ${(lastErr && (lastErr.error || lastErr.message)) || 'غير معروف'}\n`;
-        body += '(تأكد أن البوت أدمن في المجموعة)\n';
+        const errMsg = lastErr && (lastErr.error || lastErr.message || JSON.stringify(lastErr));
+        body += `السبب: ${errMsg || 'غير معروف'}\n`;
+        if (String(errMsg).includes('1545052') || String(errMsg).includes('privacy')) {
+            body += `\n⚠️ ملاحظة: فيسبوك يرفض إضافة هذا الشخص لأن إعدادات الخصوصية لديه تمنع ذلك.`;
+        }
     }
     api.sendMessage(body, event.threadID, event.messageID);
 
-    // إزالة من تم قبولهم بنجاح من القائمة المنتظرة
     entry.ids = entry.ids.filter(id => failed.includes(id) || !targets.includes(id));
     if (!entry.ids.length) {
         waiting.delete(key);
     } else {
-        // تحديث الرسالة لكي يتمكن الشخص من الرد مجدداً
         waiting.set(key, { ...entry, messageID: String(event.messageID) });
     }
     
-    return true; // إخبار البوت أن الرسالة تمت معالجتها
+    return true;
 };
