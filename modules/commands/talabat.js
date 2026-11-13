@@ -1,5 +1,5 @@
 /**
- * 📥 .طلبات — إدارة طلبات الانضمام للمجموعة (لأدمن المجموعة والمطور فقط)
+ * 📥 .طلبات — إدارة طلبات الانضمام للمجموعة
  */
 module.exports.config = {
     name: 'طلبات', aliases: ['requests', 'الطلبات', 'طلبات_الانضمام', 'joinrequests'],
@@ -9,7 +9,6 @@ module.exports.config = {
 
 const HEADER = '⋆ 𝙈𝙄𝙍𝘼 ⋆';
 const LINE = '┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈';
-
 const SESSION_TTL = 15 * 60 * 1000;
 const MAX_SHOWN = 20;
 const ACCEPT_GAP_MS = 2000;
@@ -18,16 +17,31 @@ const OFF_WORDS = ['ايقاف', 'إيقاف', 'تعطيل', 'اطفاء', 'إط
 const ACCEPT_WORDS = ['قبول', 'اقبل', 'قبل', 'accept'];
 const ALL_WORDS = ['الكل', 'كل', 'all', 'الجميع'];
 const PROBE_WORDS = ['فحص', 'probe', 'check'];
-
 const TOGGLE_CANDIDATES = ['changeApprovalMode', 'setApprovalMode', 'changeGroupApprovalMode', 'changeThreadApprovalMode'];
 
 const toLatin = t => String(t || '').replace(/[٠-٩]/g, c => String(c.charCodeAt(0) - 0x660));
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
+// ═══════════════════════════════════════════════
+// 🛠️ دالة جلب معلومات المجموعة (محدثة)
+// ═══════════════════════════════════════════════
 const getInfo = (api, tid) => new Promise(resolve => {
     try {
-        const r = api.getThreadInfo(tid, (err, info) => resolve(err ? null : info));
-        if (r && typeof r.then === 'function') r.then(resolve, () => resolve(null));
+        // المحاولة 1: الطريقة العادية
+        api.getThreadInfo(tid, (err, info) => {
+            // إذا لم يتم إرجاع approvalQueue، نحاول تمريره كحقل مطلوب
+            if (err || !info || !info.approvalQueue) {
+                try {
+                    api.getThreadInfo(tid, ["approvalQueue", "name", "adminIDs", "approvalMode"], (err2, info2) => {
+                        resolve(err2 ? (info || null) : (info2 || info));
+                    });
+                } catch (e2) {
+                    resolve(info || null);
+                }
+            } else {
+                resolve(info);
+            }
+        });
     } catch (e) { resolve(null); }
 });
 
@@ -49,13 +63,18 @@ async function canManage(api, event, cfg) {
 }
 
 function queueOf(info) {
-    const q = info && info.approvalQueue;
+    if (!info) return null;
+    const q = info.approvalQueue || info.joinRequests || info.pendingMembers;
     if (!Array.isArray(q)) return null;
-    return q.map(x => ({
-        id: String(x && (x.requesterID || x.userID || x.id) || ''),
-        inviter: x && x.inviterID ? String(x.inviterID) : null,
-        ts: x && x.timestamp
-    })).filter(x => x.id).sort((a, b) => Number(a.ts || 0) - Number(b.ts || 0));
+    return q.map(x => {
+        let id = x && (x.requesterID || x.userID || x.id || x.fbid);
+        if (!id) return null;
+        return {
+            id: String(id),
+            inviter: x && x.inviterID ? String(x.inviterID) : null,
+            ts: x && x.timestamp
+        };
+    }).filter(Boolean).sort((a, b) => Number(a.ts || 0) - Number(b.ts || 0));
 }
 
 async function setApproval(api, tid, want) {
@@ -69,41 +88,31 @@ async function setApproval(api, tid, want) {
     return { error: 'unchanged' };
 }
 
-// ═══════════════════════════════════════════════
-// 🛠️ دالة القبول (تستخدم acceptUsersToGroup وتتجاهل خطأ 1545052)
-// ═══════════════════════════════════════════════
 async function acceptOne(api, tid, uid) {
-    const doAdd = () => new Promise(resolve => {
-        if (typeof api.acceptUsersToGroup === 'function') {
-            api.acceptUsersToGroup([String(uid)], String(tid), (err) => {
-                if (err) {
-                    api.addUserToGroup(String(uid), String(tid), (err2) => resolve(err2 || null));
-                } else {
-                    resolve(null);
-                }
-            });
-        } else {
-            api.addUserToGroup(String(uid), String(tid), (err) => resolve(err || null));
-        }
+    return new Promise((resolve) => {
+        const doAdd = (callback) => {
+            if (typeof api.acceptUsersToGroup === 'function') {
+                api.acceptUsersToGroup([String(uid)], String(tid), (err) => {
+                    if (err) {
+                        api.addUserToGroup(String(uid), String(tid), callback);
+                    } else {
+                        callback(null);
+                    }
+                });
+            } else {
+                api.addUserToGroup(String(uid), String(tid), callback);
+            }
+        };
+
+        doAdd((err) => {
+            if (err && (err.error == 1545052 || String(err.error).includes('1545052'))) {
+                console.log(`[طلبات] ⚠️ فيسبوك رفض إضافة ${uid} (خطأ 1545052). تم التجاهل.`);
+                return resolve({ ok: true, unsure: true }); 
+            }
+            if (err) return resolve({ ok: false, why: errText(err) });
+            resolve({ ok: true }); 
+        });
     });
-
-    const err = await doAdd();
-
-    // تجاهل خطأ 1545052 (رفض من فيسبوك بسبب الخصوصية)
-    if (err && String(err.error).includes('1545052')) {
-        console.log(`[طلبات] ⚠️ خطأ 1545052 (رفض من فيسبوك) للعضو ${uid}. تم اعتباره مقبولاً.`);
-        return { ok: true, unsure: true }; 
-    }
-
-    if (err) return { ok: false, why: errText(err) };
-    
-    await sleep(2000);
-    const info = await getInfo(api, tid);
-    if (!info) return { ok: true, unsure: true };
-    if ((info.participantIDs || []).map(String).includes(String(uid))) return { ok: true };
-    const q = queueOf(info);
-    if (q && q.some(x => x.id === String(uid))) return { ok: false, why: 'ما زال الطلب معلّقًا' };
-    return { ok: true, unsure: true };
 }
 
 async function applyToggle(api, tid, want) {
@@ -124,19 +133,20 @@ function remember(info, tid, ids) {
     sessions.set(String(info.messageID), { tid: String(tid), at: now, ids });
 }
 
-// ═══════════════════════════════════════════════
-// 🎨 تصميم القائمة (تم تعديلها لتطابق طلبك بالضبط)
-// ═══════════════════════════════════════════════
 async function buildMenu(api, tid, deco, note) {
     const info = await getInfo(api, tid);
     if (!info) return { text: deco.errorBox('تعذّر قراءة معلومات المجموعة، حاول لاحقًا'), ids: [] };
+
+    // 👇 سطر لطباعة المعلومات في سجلات Render لمعرفة السبب
+    console.log('--- [طلبات] معلومات المجموعة ---');
+    console.log('approvalMode:', info.approvalMode);
+    console.log('approvalQueue:', info.approvalQueue);
 
     const on = Boolean(info.approvalMode);
     const queue = queueOf(info) || [];
     const ids = [];
     
     let text = '';
-    // إضافة الملاحظات (مثل نتيجة القبول) في البداية إذا وجدت
     if (note) text += `${note}\n\n`;
 
     text += `${HEADER}\n${LINE}\n✦ طلبات الانضمام ✦\n${LINE}\n`;
@@ -161,7 +171,7 @@ async function buildMenu(api, tid, deco, note) {
         text += 'لا توجد طلبات حالياً ✨';
     }
 
-    return { text, ids, on, botAdmin: true };
+    return { text, ids, on };
 }
 
 async function acceptMany(api, tid, uids) {
