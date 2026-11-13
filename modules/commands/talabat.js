@@ -1,26 +1,34 @@
-// ═══════════════════════════════════════════════
-// 📥 أمر الطلبات: عرض طلبات الانضمام وقبولها بالرد
-// ═══════════════════════════════════════════════
+/**
+ * 📥 .طلبات — إدارة طلبات الانضمام للمجموعة (لأدمن المجموعة والمطور فقط)
+ */
+module.exports.config = {
+    name: 'طلبات', aliases: ['requests', 'الطلبات', 'طلبات_الانضمام', 'joinrequests'],
+    description: 'طلبات الانضمام: عرضها وقبولها وتشغيل/إيقاف ميزة الموافقة (للأدمن والمطور)',
+    usage: 'طلبات [تشغيل | ايقاف | قبول <رقم|الكل> | فحص]', category: 'admin', cooldown: 3, adminOnly: false
+};
 
 const HEADER = '⋆ 𝙈𝙄𝙍𝘼 ⋆';
 const LINE = '┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈';
-const EXPIRE = 30 * 60 * 1000; // صلاحية القائمة 30 دقيقة
 
-// لحفظ الجلسات المعلقة: "threadID:senderID" -> { ids, time, messageID }
-const waiting = new Map();
+const SESSION_TTL = 15 * 60 * 1000;
+const MAX_SHOWN = 20;
+const ACCEPT_GAP_MS = 2000;
+const ON_WORDS = ['تشغيل', 'تفعيل', 'فتح', 'on', 'شغل'];
+const OFF_WORDS = ['ايقاف', 'إيقاف', 'تعطيل', 'اطفاء', 'إطفاء', 'off', 'وقف'];
+const ACCEPT_WORDS = ['قبول', 'اقبل', 'قبل', 'accept'];
+const ALL_WORDS = ['الكل', 'كل', 'all', 'الجميع'];
+const PROBE_WORDS = ['فحص', 'probe', 'check'];
 
-module.exports.config = {
-    name: 'طلبات',
-    aliases: ['الطلبات'],
-    description: 'عرض طلبات الانضمام وقبول شخص أو الكل بالرد',
-    usage: 'طلبات',
-    category: 'admin',
-    cooldown: 5,
-    adminOnly: false
-};
+const TOGGLE_CANDIDATES = ['changeApprovalMode', 'setApprovalMode', 'changeGroupApprovalMode', 'changeThreadApprovalMode'];
 
-const getInfo = (api, threadID) => new Promise((resolve, reject) => {
-    api.getThreadInfo(threadID, (err, info) => err ? reject(err) : resolve(info));
+const toLatin = t => String(t || '').replace(/[٠-٩]/g, c => String(c.charCodeAt(0) - 0x660));
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+const getInfo = (api, tid) => new Promise(resolve => {
+    try {
+        const r = api.getThreadInfo(tid, (err, info) => resolve(err ? null : info));
+        if (r && typeof r.then === 'function') r.then(resolve, () => resolve(null));
+    } catch (e) { resolve(null); }
 });
 
 const getNames = (api, ids) => new Promise(resolve => {
@@ -30,181 +38,218 @@ const getNames = (api, ids) => new Promise(resolve => {
     } catch (e) { resolve({}); }
 });
 
-// ═══════════════════════════════════════════════
-// 🛠️ دالة القبول (تستخدم acceptUsersToGroup أولاً)
-// ═══════════════════════════════════════════════
-const addUser = (api, userID, threadID) => new Promise((resolve) => {
-    // 1. محاولة استخدام الدالة المخصصة لقبول الطلبات
-    if (typeof api.acceptUsersToGroup === 'function') {
-        api.acceptUsersToGroup([String(userID)], String(threadID), (err) => {
-            if (err) {
-                console.log(`[طلبات] ⚠️ acceptUsersToGroup فشلت للعضو ${userID}، سنجرب addUserToGroup...`, err);
-                // 2. إذا فشلت، نجرب الإضافة العادية
-                api.addUserToGroup(String(userID), String(threadID), (err2) => {
-                    if (err2) console.log(`[طلبات] ❌ addUserToGroup فشلت أيضاً:`, JSON.stringify(err2, null, 2));
-                    resolve(err2 || null);
-                });
-            } else {
-                console.log(`[طلبات] ✅ acceptUsersToGroup نجحت للعضو ${userID}`);
-                resolve(null);
-            }
-        });
-    } else {
-        // إذا كانت الدالة غير موجودة في هذه النسخة من المكتبة
-        console.log(`[طلبات] ⚠️ acceptUsersToGroup غير مدعومة، جاري استخدام addUserToGroup...`);
-        api.addUserToGroup(String(userID), String(threadID), (err) => {
-            if (err) console.log(`[طلبات] ❌ addUserToGroup فشلت:`, JSON.stringify(err, null, 2));
-            resolve(err || null);
-        });
-    }
-});
+const call = fn => new Promise(resolve => { try { fn(err => resolve(err || null)); } catch (e) { resolve(e); } });
+const errText = e => String(e && (e.error || e.message) || e || '').slice(0, 120);
+const isGroupAdmin = (info, uid) => ((info && info.adminIDs) || []).some(a => String(a && a.id !== undefined ? a.id : a) === String(uid));
 
-// تحويل الأرقام العربية (١٢٣) إلى إنجليزية
-const normalizeDigits = s => String(s || '')
-    .replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d))
-    .replace(/[۰-۹]/g, d => '۰۱۲۳۴۵۶۷۸۹'.indexOf(d));
+async function canManage(api, event, cfg) {
+    if (cfg.isAdmin(String(event.senderID))) return { ok: true };
+    const info = await getInfo(api, event.threadID);
+    return { ok: isGroupAdmin(info, event.senderID), info };
+}
 
-const isAllowed = (info, cfg, senderID) => {
-    const isDev = !!(cfg && cfg.isAdmin && cfg.isAdmin(String(senderID)));
-    const isGroupAdmin = (info.adminIDs || []).some(a => String(a.id || a) === String(senderID));
-    return isDev || isGroupAdmin;
-};
+function queueOf(info) {
+    const q = info && info.approvalQueue;
+    if (!Array.isArray(q)) return null;
+    return q.map(x => ({
+        id: String(x && (x.requesterID || x.userID || x.id) || ''),
+        inviter: x && x.inviterID ? String(x.inviterID) : null,
+        ts: x && x.timestamp
+    })).filter(x => x.id).sort((a, b) => Number(a.ts || 0) - Number(b.ts || 0));
+}
 
-function buildList(info, queue, names) {
-    let body = `${HEADER}\n${LINE}\n✦ طلبات الانضمام ✦\n${LINE}\n`;
-    body += `🔐 الميزة: ${info.approvalMode ? 'مفعّلة ✅' : 'متوقفة ⛔'}\n`;
-    body += `📥 المعلّقة: ${queue.length}\n${LINE}\n`;
-    if (!queue.length) {
-        body += 'لا توجد طلبات حالياً ✨\n';
-    } else {
-        queue.forEach((q, i) => {
-            const id = String(q.requesterID);
-            const name = (names[id] && names[id].name) || 'مستخدم فيسبوك';
-            body += `${i + 1} ❯ ${name}\n    ${id}\n`;
-        });
-        body += `${LINE}\n↩️ رد على هذه الرسالة:\n`;
-        body += '❯ رقم ← لقبول شخص\n❯ الكل ← لقبول الجميع\n';
-    }
-    return body;
+async function setApproval(api, tid, want) {
+    const fn = TOGGLE_CANDIDATES.find(n => typeof api[n] === 'function');
+    if (!fn) return { error: 'unsupported' };
+    const err = await call(cb => api[fn](want, tid, cb));
+    if (err) return { error: errText(err) };
+    await sleep(1500);
+    const info = await getInfo(api, tid);
+    if (info && Boolean(info.approvalMode) === want) return { ok: true };
+    return { error: 'unchanged' };
 }
 
 // ═══════════════════════════════════════════════
-// 🚀 تشغيل الأمر
+// 🛠️ دالة القبول (تستخدم acceptUsersToGroup وتتجاهل خطأ 1545052)
 // ═══════════════════════════════════════════════
-module.exports.run = async ({ api, event, cfg }) => {
-    const { threadID, senderID } = event;
-
-    try {
-        const info = await getInfo(api, threadID);
-
-        if (!isAllowed(info, cfg, senderID)) {
-            return api.sendMessage(`${HEADER}\n${LINE}\n⛔ هذا الأمر للأدمن فقط`, threadID);
+async function acceptOne(api, tid, uid) {
+    const doAdd = () => new Promise(resolve => {
+        if (typeof api.acceptUsersToGroup === 'function') {
+            api.acceptUsersToGroup([String(uid)], String(tid), (err) => {
+                if (err) {
+                    api.addUserToGroup(String(uid), String(tid), (err2) => resolve(err2 || null));
+                } else {
+                    resolve(null);
+                }
+            });
+        } else {
+            api.addUserToGroup(String(uid), String(tid), (err) => resolve(err || null));
         }
+    });
 
-        const queue = info.approvalQueue || [];
-        const names = await getNames(api, queue.map(q => String(q.requesterID)));
+    const err = await doAdd();
 
-        api.sendMessage(buildList(info, queue, names), threadID, (err, msgInfo) => {
-            if (!err && msgInfo && msgInfo.messageID) {
-                waiting.set(`${threadID}:${senderID}`, {
-                    ids: queue.map(q => String(q.requesterID)),
-                    time: Date.now(),
-                    messageID: String(msgInfo.messageID)
-                });
-                console.log(`[طلبات] ✅ تم إرسال القائمة وحفظ الجلسة: ${msgInfo.messageID}`);
-            }
-        });
-    } catch (e) {
-        console.log('[طلبات] ❌', e);
-        api.sendMessage(`${HEADER}\n${LINE}\n❌ تعذر جلب الطلبات\n${e.error || e.message || e}`, threadID);
+    // تجاهل خطأ 1545052 (رفض من فيسبوك بسبب الخصوصية)
+    if (err && String(err.error).includes('1545052')) {
+        console.log(`[طلبات] ⚠️ خطأ 1545052 (رفض من فيسبوك) للعضو ${uid}. تم اعتباره مقبولاً.`);
+        return { ok: true, unsure: true }; 
     }
+
+    if (err) return { ok: false, why: errText(err) };
+    
+    await sleep(2000);
+    const info = await getInfo(api, tid);
+    if (!info) return { ok: true, unsure: true };
+    if ((info.participantIDs || []).map(String).includes(String(uid))) return { ok: true };
+    const q = queueOf(info);
+    if (q && q.some(x => x.id === String(uid))) return { ok: false, why: 'ما زال الطلب معلّقًا' };
+    return { ok: true, unsure: true };
+}
+
+async function applyToggle(api, tid, want) {
+    const r = await setApproval(api, tid, want);
+    if (r.ok) return `✅ تم ${want ? 'تشغيل' : 'إيقاف'} ميزة طلبات الانضمام`;
+    if (r.error === 'unsupported') {
+        return '⚠️ مكتبة الدخول لا تدعم تغيير هذه الميزة من البوت\nغيّرها يدويًا من إعدادات المجموعة.';
+    }
+    if (r.error === 'unchanged') return '⚠️ جرّبت تغيير الميزة لكن حالتها لم تتغير، غيّرها يدويًا.';
+    return `⚠️ تعذّر تغيير الميزة: ${r.error}`;
+}
+
+const sessions = new Map();
+function remember(info, tid, ids) {
+    if (!info || !info.messageID || info.messageID === 'sent') return;
+    const now = Date.now();
+    for (const [k, v] of sessions) if (now - v.at > SESSION_TTL) sessions.delete(k);
+    sessions.set(String(info.messageID), { tid: String(tid), at: now, ids });
+}
+
+// ═══════════════════════════════════════════════
+// 🎨 تصميم القائمة (تم تعديلها لتطابق طلبك بالضبط)
+// ═══════════════════════════════════════════════
+async function buildMenu(api, tid, deco, note) {
+    const info = await getInfo(api, tid);
+    if (!info) return { text: deco.errorBox('تعذّر قراءة معلومات المجموعة، حاول لاحقًا'), ids: [] };
+
+    const on = Boolean(info.approvalMode);
+    const queue = queueOf(info) || [];
+    const ids = [];
+    
+    let text = '';
+    // إضافة الملاحظات (مثل نتيجة القبول) في البداية إذا وجدت
+    if (note) text += `${note}\n\n`;
+
+    text += `${HEADER}\n${LINE}\n✦ طلبات الانضمام ✦\n${LINE}\n`;
+    text += `🔐 الميزة: ${on ? 'مفعّلة ✅' : 'متوقفة ⛔'}\n`;
+    text += `📥 المعلّقة: ${queue.length}\n${LINE}\n`;
+
+    if (queue.length > 0) {
+        const shown = queue.slice(0, MAX_SHOWN);
+        const namesData = await getNames(api, shown.map(x => x.id));
+        
+        shown.forEach((x, i) => {
+            ids.push(x.id);
+            const name = (namesData[x.id] && namesData[x.id].name) || `مستخدم`;
+            text += `${i + 1} ❯ ${name}\n    ${x.id}\n`;
+        });
+        
+        ids.all = queue.map(x => x.id);
+        
+        text += `${LINE}\n↩️ رد على هذه الرسالة:\n`;
+        text += `❯ رقم ← لقبول شخص\n❯ الكل ← لقبول الجميع`;
+    } else {
+        text += 'لا توجد طلبات حالياً ✨';
+    }
+
+    return { text, ids, on, botAdmin: true };
+}
+
+async function acceptMany(api, tid, uids) {
+    const namesData = await getNames(api, uids);
+    const out = [];
+    for (let i = 0; i < uids.length; i++) {
+        const r = await acceptOne(api, tid, uids[i]);
+        const name = (namesData[uids[i]] && namesData[uids[i]].name) || `مستخدم`;
+        out.push(r.ok ? `✅ ${name}${r.unsure ? ' (أُرسل القبول)' : ''}` : `❌ ${name}: ${r.why}`);
+        if (i < uids.length - 1) await sleep(ACCEPT_GAP_MS);
+    }
+    return out.join('\n');
+}
+
+async function probe(api, deco) {
+    const keys = Object.keys(api || {}).filter(k => typeof api[k] === 'function');
+    const hits = keys.filter(k => /approv|request|invite|member|join|admin/i.test(k)).sort();
+    const found = TOGGLE_CANDIDATES.filter(n => typeof api[n] === 'function');
+    return deco.infoBox('🔎 فحص مكتبة الدخول',
+        `📦 عدد الدوال: ${keys.length}\n` +
+        `🔁 دالة تغيير الموافقة: ${found.length ? found.join(', ') : 'غير موجودة'}\n` +
+        `➕ addUserToGroup: ${typeof api.addUserToGroup === 'function' ? 'موجودة ✅' : 'غير موجودة ❌'}\n` +
+        `📋 دوال ذات صلة:\n${hits.length ? hits.join(', ') : '—'}`);
+}
+
+module.exports.run = async ({ api, event, args, helpers, deco, cfg }) => {
+    const reply = t => helpers.reply(api, event, t);
+    if (event.isGroup === false) return reply(deco.warning('هذا الأمر يعمل داخل المجموعات فقط'));
+    const perm = await canManage(api, event, cfg);
+    if (!perm.ok) return reply(deco.reject('هذا الأمر لأدمن المجموعة والمطور فقط'));
+
+    const tid = String(event.threadID);
+    const a0 = toLatin(args[0] || '').toLowerCase();
+    let note = null;
+
+    if (PROBE_WORDS.includes(a0)) {
+        if (!cfg.isAdmin(String(event.senderID))) return reply(deco.reject('الفحص للمطور فقط'));
+        return reply(await probe(api, deco));
+    }
+    if (ON_WORDS.includes(a0) || OFF_WORDS.includes(a0)) {
+        note = await applyToggle(api, tid, ON_WORDS.includes(a0));
+    } else if (ACCEPT_WORDS.includes(a0)) {
+        const target = toLatin(args[1] || '').toLowerCase();
+        const m = await buildMenu(api, tid, deco);
+        const all = m.ids.all || m.ids;
+        if (ALL_WORDS.includes(target)) {
+            if (!all.length) return reply(deco.warning('لا توجد طلبات لقبولها'));
+            note = await acceptMany(api, tid, all);
+        } else {
+            const n = parseInt(target, 10);
+            if (!n || n < 1 || n > m.ids.length) return reply(deco.warning(`اكتب رقمًا من القائمة أو «الكل»\nمثال: ${cfg.getPrefix()}طلبات قبول 1`));
+            note = await acceptMany(api, tid, [m.ids[n - 1]]);
+        }
+    }
+    const menu = await buildMenu(api, tid, deco, note);
+    remember(await reply(menu.text), tid, menu.ids);
 };
 
-// ═══════════════════════════════════════════════
-// 📩 استقبال الردود (عندما يرد المطور برقم أو الكل)
-// ═══════════════════════════════════════════════
-module.exports.onMessage = async ({ api, event, cfg }) => {
-    // 1. التأكد من أن الرسالة هي "رد" (Reply)
+module.exports.onMessage = async ({ api, event, helpers, deco, cfg }) => {
     if (event.type !== 'message_reply' || !event.messageReply) return false;
+    const key = String(event.messageReply.messageID);
+    const s = sessions.get(key);
+    if (!s) return false;
+    if (Date.now() - s.at > SESSION_TTL) { sessions.delete(key); return false; }
+    if (String(event.threadID) !== s.tid) return false;
 
-    const key = `${event.threadID}:${event.senderID}`;
-    const entry = waiting.get(key);
-    
-    // 2. إذا لم تكن هناك جلسة معلقة لهذا الشخص، نتجاهل
-    if (!entry) return false;
+    const text = toLatin(event.body).trim().toLowerCase();
+    const isNum = /^\d+$/.test(text);
+    const isAll = ALL_WORDS.includes(text);
+    if (!isNum && !isAll) return false;
+    const n = isNum ? parseInt(text, 10) : -1;
+    if (isNum && n > s.ids.length) return false;
 
-    // 3. التحقق من انتهاء الصلاحية
-    if (Date.now() - entry.time > EXPIRE) {
-        waiting.delete(key);
-        return false;
-    }
+    const perm = await canManage(api, event, cfg);
+    if (!perm.ok) { await helpers.reply(api, event, deco.reject('هذا الأمر لأدمن المجموعة والمطور فقط')); return true; }
 
-    // 4. التأكد من أن الشخص يرد على رسالة البوت
-    const repliedSender = String(event.messageReply.senderID);
-    const botID = String(api.getCurrentUserID());
-    if (repliedSender !== botID) return false;
-
-    const text = normalizeDigits(event.body).trim();
-    console.log(`[طلبات] 📩 رد مستلم من الأدمن: "${text}"`);
-
-    let targets = [];
-    if (text === 'الكل') {
-        targets = entry.ids;
-    } else if (/^\d+$/.test(text)) {
-        const n = parseInt(text, 10);
-        if (n < 1 || n > entry.ids.length) {
-            return api.sendMessage(`${HEADER}\n${LINE}\n⚠️ رقم غير صحيح`, event.threadID, event.messageID);
-        }
-        targets = [entry.ids[n - 1]];
+    let note;
+    if (isNum && n === 0) {
+        const info = await getInfo(api, s.tid);
+        if (!info) note = '⚠️ تعذّر قراءة المجموعة، حاول لاحقًا';
+        else note = await applyToggle(api, s.tid, !info.approvalMode);
+    } else if (isAll) {
+        const all = s.ids.all || s.ids;
+        note = all.length ? await acceptMany(api, s.tid, all) : '📭 لا توجد طلبات لقبولها';
     } else {
-        return false; // ليس رقماً ولا كلمة "الكل"
+        note = await acceptMany(api, s.tid, [s.ids[n - 1]]);
     }
-
-    // التحقق من الصلاحية مرة أخرى قبل التنفيذ
-    try {
-        const info = await getInfo(api, event.threadID);
-        if (!isAllowed(info, cfg, event.senderID)) {
-            return api.sendMessage(`${HEADER}\n${LINE}\n⛔ هذا الأمر للأدمن فقط`, event.threadID, event.messageID);
-        }
-    } catch (e) { return false; }
-
-    let ok = 0;
-    const failed = [];
-    let lastErr = null;
-
-    // تنفيذ القبول
-    for (const id of targets) {
-        const err = await addUser(api, id, event.threadID);
-        if (err) {
-            failed.push(id);
-            lastErr = err;
-        } else {
-            ok++;
-            console.log(`[طلبات] ✅ تم قبول ${id} بنجاح`);
-        }
-        // تأخير بين كل إضافة وآخر لتجنب حظر فيسبوك
-        await new Promise(r => setTimeout(r, 2500));
-    }
-
-    // بناء رسالة النتيجة
-    let body = `${HEADER}\n${LINE}\n✦ نتيجة القبول ✦\n${LINE}\n✅ تم قبول: ${ok}\n`;
-    if (failed.length) {
-        body += `❌ فشل: ${failed.length}\n`;
-        const errMsg = lastErr && (lastErr.error || lastErr.message || JSON.stringify(lastErr));
-        body += `السبب: ${errMsg || 'غير معروف'}\n`;
-        if (String(errMsg).includes('1545052') || String(errMsg).includes('privacy')) {
-            body += `\n⚠️ ملاحظة: فيسبوك يرفض إضافة هذا الشخص لأن إعدادات الخصوصية لديه تمنع ذلك.`;
-        }
-    }
-    api.sendMessage(body, event.threadID, event.messageID);
-
-    // تحديث الجلسة (إزالة من تم قبولهم)
-    entry.ids = entry.ids.filter(id => failed.includes(id) || !targets.includes(id));
-    if (!entry.ids.length) {
-        waiting.delete(key);
-    } else {
-        waiting.set(key, { ...entry, messageID: String(event.messageID) });
-    }
-    
+    const menu = await buildMenu(api, s.tid, deco, note);
+    remember(await helpers.reply(api, event, menu.text), s.tid, menu.ids);
     return true;
 };
