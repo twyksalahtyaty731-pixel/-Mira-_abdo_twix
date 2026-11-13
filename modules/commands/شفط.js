@@ -1,101 +1,179 @@
-const fs = require('fs');
+// ═══════════════════════════════════════════════
+// 👁️ أمر شفط / شقط — إرجاع الأعضاء الذين يغادرون المجموعة بأنفسهم
+// ═══════════════════════════════════════════════
+const fs = require('fs-extra');
 const path = require('path');
 
-// ═══════════════════════════════════════════════
-// 💾 حفظ حالة التفعيل في ملف (حتى لا تضيع عند إعادة التشغيل)
-// ═══════════════════════════════════════════════
-const STATE_FILE = path.join(__dirname, '..', '..', 'Heba_DB', 'shagt_state.json');
-
-function loadState() {
-    try {
-        const data = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
-        return data && typeof data === 'object' ? data : {};
-    } catch (e) { return {}; }
-}
-function saveState(state) {
-    try {
-        fs.mkdirSync(path.dirname(STATE_FILE), { recursive: true });
-        fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
-    } catch (e) {}
-}
+const HEADER = '⋆ 𝙈𝙄𝙍𝘼 ⋆';
+const LINE = '┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈';
+const DIR = path.join(__dirname, '..', '..', 'Heba_DB');
+const FILE = path.join(DIR, 'shagt_state.json');
 
 module.exports.config = {
     name: 'شقط',
     aliases: ['شفط'],
-    description: 'يراقب المجموعة ويرجع أي شخص يغادرها بنفسه (للمطور فقط)',
-    usage: 'شقط (لتفعيل/إيقاف)',
+    description: 'يراقب المجموعة ويرجع أي شخص يغادرها بنفسه (للمطور وأدمن المجموعة)',
+    usage: 'شقط',
     category: 'admin',
     cooldown: 5,
     adminOnly: false
 };
 
+// ───────── حفظ وإدارة الحالة ─────────
+function readAll() {
+    try { return JSON.parse(fs.readFileSync(FILE, 'utf-8')); } catch (e) { return {}; }
+}
+function writeAll(o) {
+    fs.mkdirSync(DIR, { recursive: true });
+    const tmp = `${FILE}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(o, null, 2));
+    fs.renameSync(tmp, FILE);
+}
+
+const getInfo = (api, tid) => new Promise(resolve => {
+    try { api.getThreadInfo(tid, (err, info) => resolve(err ? null : info)); } catch (e) { resolve(null); }
+});
+const isGroupAdmin = (info, uid) => ((info && info.adminIDs) || []).some(a => String(a && a.id !== undefined ? a.id : a) === String(uid));
+
+async function canManage(api, event, cfg) {
+    if (cfg.isAdmin(String(event.senderID))) return true;
+    const info = await getInfo(api, event.threadID);
+    return isGroupAdmin(info, event.senderID);
+}
+
+// ───────── تشغيل / إيقاف الأمر ─────────
 module.exports.run = async ({ api, event, helpers, cfg }) => {
     const { threadID, senderID } = event;
 
-    // 🔒 حماية المطور
-    if (!cfg.isAdmin(String(senderID))) {
-        return helpers.reply(api, event, "من انت ايها الفلاح ؛-؛");
+    // التحقق من الصلاحيات
+    const allowed = await canManage(api, event, cfg);
+    if (!allowed) {
+        return helpers.reply(api, event, `${HEADER}\n${LINE}\n⛔ هذا الأمر للأدمن والمطور فقط\n${LINE}`);
     }
 
-    const state = loadState();
-    const isOn = !!state[String(threadID)];
+    const tid = String(threadID);
+    const all = readAll();
+    const isOn = !!(all[tid] && all[tid].on);
 
     if (isOn) {
-        delete state[String(threadID)];
-        saveState(state);
-        return helpers.reply(api, event, "🔴 تم إيقاف وضع الشفط.\nلن يتم إرجاع من يغادر المجموعة.");
+        // إيقاف
+        delete all[tid];
+        writeAll(all);
+        return helpers.reply(api, event, 
+`${HEADER}
+${LINE}
+⛔ تم إيقاف وضع الشفط
+
+🔓 لن يتم إرجاع من يغادر المجموعة بعد الآن.
+${LINE}`
+        );
     } else {
-        state[String(threadID)] = true;
-        saveState(state);
-        return helpers.reply(api, event, "🟢 تم تفعيل وضع الشفط!\nأي شخص يغادر هذه المجموعة بنفسه سيتم إرجاعه فوراً.");
+        // تفعيل
+        all[tid] = { on: true };
+        writeAll(all);
+        
+        // التحقق من أن البوت أدمن (لإعلام المطور)
+        const info = await getInfo(api, tid);
+        const botIsAdmin = isGroupAdmin(info, api.getCurrentUserID());
+        const warn = (!botIsAdmin) ? '\n⚠️ تنبيه: البوت ليس أدمن، قد لا يستطيع إرجاع الأعضاء.' : '';
+
+        return helpers.reply(api, event, 
+`${HEADER}
+${LINE}
+🟢 تم تفعيل وضع الشفط!
+
+🛡️ سأراقب المجموعة، وأي شخص يغادر بنفسه (وليس بطرد) سأقوم بإرجاعه فوراً.
+${warn}
+${LINE}`
+        );
     }
 };
 
 // ═══════════════════════════════════════════════
-// 👁️ مراقبة الأحداث (متى يغادر شخص بنفسه)
+// 👁️ مراقبة الأحداث (يستدعى تلقائياً من main.js)
 // ═══════════════════════════════════════════════
-module.exports.onEvent = async ({ api, event }) => {
-    // فحص نوع الحدث (المغادرة)
-    const logType = String(event.logMessageType || '');
-    if (!/unsubscribe|leave|remove/i.test(logType)) return;
+const recent = new Map(); // منع التكرار السريع
+const noticed = new Map(); // منع تكرار الرسائل
+const readds = new Map(); // الحد الأقصى للإعادة (3 مرات في الساعة)
+const MAX_READD_PER_HOUR = 3;
 
-    // هل الوضع مفعّل في هذه المجموعة؟
-    const state = loadState();
-    if (!state[String(event.threadID)]) return;
+const guard = (map, key, ms) => {
+    const now = Date.now();
+    if (now - (map.get(key) || 0) < ms) return false;
+    map.set(key, now);
+    return true;
+};
 
-    // معرفة من غادر
+const allowReadd = (tid, uid) => {
+    const key = `${tid}:${uid}`, now = Date.now();
+    const list = (readds.get(key) || []).filter(t => now - t < 3600000);
+    if (list.length >= MAX_READD_PER_HOUR) { readds.set(key, list); return false; }
+    list.push(now); readds.set(key, list);
+    return true;
+};
+
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const call = (fn) => new Promise(resolve => { try { fn(err => resolve(err || null)); } catch (e) { resolve(e); } });
+
+module.exports.onEvent = async ({ api, event, helpers }) => {
+    if (event.logMessageType !== 'log:unsubscribe') return;
+    
+    const tid = String(event.threadID);
+    const st = readAll()[tid];
+    if (!st || !st.on) return; // الأمر غير مفعل في هذه المجموعة
+
     const data = event.logMessageData || {};
-    const leftID = data.leftParticipantFbId ||
-                   data.unsubscribedParticipantFbId ||
-                   data.userFbId;
+    const left = String(data.leftParticipantFbId || '');
+    
+    // تجاهل إذا كان البوت نفسه هو من خرج
+    if (!left || left === String(api.getCurrentUserID())) return;
+    
+    // تجاهل إذا تم طرد العضو بواسطة أدمن (نرجّع فقط من يخرج بنفسه)
+    const author = String(event.author || '');
+    if (author && author !== left) return;
 
-    if (!leftID) return;
+    // حماية من التكرار
+    if (!guard(recent, `${tid}:leave:${left}`, 5000)) return;
 
-    // تجاهل إذا كان البوت نفسه هو من غادر
-    if (String(leftID) === String(api.getCurrentUserID())) return;
-
-    // ✅ إرجاع من غادر بنفسه فقط (تجاهل المطرودين)
-    if (String(event.author) !== String(leftID)) {
-        console.log(`[شقط] ⏭️ ${leftID} طُرد بواسطة ${event.author}، تم تجاهله.`);
+    // التحقق من الحد الأقصى للإعادة
+    if (!allowReadd(tid, left)) {
+        if (guard(noticed, `${tid}:cap:${left}`, 30000)) {
+            api.sendMessage(`${HEADER}\n${LINE}\n⚠️ العضو خرج مراراً وتكراراً، توقفت عن إعادته لحماية البوت.\n${LINE}`, tid);
+        }
         return;
     }
 
-    const tryAdd = () => new Promise(resolve => {
-        try {
-            api.addUserToGroup(String(leftID), String(event.threadID), (err) => resolve(err || null));
-        } catch (e) {
-            resolve(e);
-        }
-    });
+    await sleep(1500); // انتظار بسيط قبل الإضافة
 
-    // محاولة الإرجاع حتى 3 مرات مع زيادة الانتظار
-    for (let i = 1; i <= 3; i++) {
-        await new Promise(r => setTimeout(r, 3000 * i));
-        const err = await tryAdd();
-        if (!err) {
-            console.log(`[شقط] ✅ تم إرجاع العضو ${leftID} إلى المجموعة`);
-            return;
+    const err = await call(cb => api.addUserToGroup(left, tid, cb));
+    if (err) {
+        console.log(`[شقط] ❌ تعذّرت إعادة ${left} (${(err && (err.error || err.message)) || err})`);
+        if (guard(noticed, `${tid}:fail:${left}`, 30000)) {
+            api.sendMessage(`${HEADER}\n${LINE}\n⚠️ تعذّر إرجاع العضو.\nالسبب: قد يكون حظر البوت أو أغلق خاصية الإضافة.\n${LINE}`, tid);
         }
-        console.log(`[شقط] ❌ محاولة ${i} فشلت للعضو ${leftID}:`, err.error || err.message || err);
+        return;
+    }
+
+    // نجحت الإعادة
+    let name = '';
+    try { name = String(await helpers.getName(api, left) || '').trim(); } catch (e) {}
+
+    if (guard(noticed, `${tid}:success:${left}`, 10000)) {
+        const body = 
+`${HEADER}
+${LINE}
+🛡️ تم الشفط بنجاح!
+👤 العضو: ${name ? `@${name}` : 'عضو'}
+🔒 السبب: غادر المجموعة بنفسه
+${LINE}`;
+        
+        try {
+            api.sendMessage({ 
+                body, 
+                mentions: name ? [{ tag: `@${name}`, id: left }] : [] 
+            }, tid);
+        } catch (e) {
+            api.sendMessage(body, tid);
+        }
     }
 };
