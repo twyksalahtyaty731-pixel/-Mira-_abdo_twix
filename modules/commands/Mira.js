@@ -14,13 +14,30 @@ const BASE = 'https://api.groq.com/openai/v1';
 const MODELS = ['openai/gpt-oss-120b', 'qwen/qwen3.6-27b', 'openai/gpt-oss-20b'];
 
 // ═══════════════════════════════════════════════
-// 🧠 الذاكرة (لحفظ سياق المحادثة مثل القديم)
+// 🧠 الذاكرة وسياق المحادثة
 // ═══════════════════════════════════════════════
 const MEMORY_TURNS = 6;
 const MEMORY_TTL = 15 * 60 * 1000; // 15 دقيقة
 const memory = new Map();
 const lastAuto = new Map();
-const AUTO_GAP = 3000; // منع التكرار السريع
+const AUTO_GAP = 3000; 
+
+// ═══════════════════════════════════════════════
+// 📌 تتبع رسائل الذكاء الاصطناعي فقط (لحل مشكلة التداخل)
+// ═══════════════════════════════════════════════
+const aiMessages = new Map(); 
+const AI_MSG_TTL = 60 * 60 * 1000; // ساعة واحدة
+
+// دالة تنظيف تلقائية للذاكرة (لعدم استهلاك الذاكرة على Render)
+setInterval(() => {
+    const now = Date.now();
+    for (const [id, time] of aiMessages) {
+        if (now - time > AI_MSG_TTL) aiMessages.delete(id);
+    }
+    for (const [k, v] of memory) {
+        if (now - v.at > MEMORY_TTL) memory.delete(k);
+    }
+}, 5 * 60 * 1000);
 
 const SHARED_RULES = ' اكتب بالعربية بنفس لهجة من يحدثك. ردك يجب أن يكون ذكياً ومباشراً (جملة إلى ثلاث جمل). لا تشتم بألفاظ نابية. ';
 const SYSTEM_PEOPLE = 'أنتِ «ميرا»، ذكاء اصطناعي ذكي وواثق. أجيبي على جميع المواضيع بذكاء.' + SHARED_RULES;
@@ -28,14 +45,12 @@ const SYSTEM_DEV = 'أنتِ «ميرا»، ذكاء اصطناعي. الشخص 
 
 function remember(key, role, content) {
     const now = Date.now();
-    for (const [k, v] of memory) if (now - v.at > MEMORY_TTL) memory.delete(k);
     const m = memory.get(key) || { msgs: [], at: now };
     m.msgs.push({ role, content });
     m.msgs = m.msgs.slice(-MEMORY_TURNS); m.at = now;
     memory.set(key, m);
 }
 
-// دالة الإرسال
 const sendReply = (api, text, threadID, replyTo) => new Promise(resolve => {
     try {
         api.sendMessage(text, String(threadID), (err, info) => {
@@ -48,8 +63,6 @@ const sendReply = (api, text, threadID, replyTo) => new Promise(resolve => {
 
 async function askAI(question, isDev, memKey) {
     const sysPrompt = isDev ? SYSTEM_DEV : SYSTEM_PEOPLE;
-    
-    // جلب الذاكرة
     let history = (memory.get(memKey) || { msgs: [] }).msgs;
     const messages = [{ role: 'system', content: sysPrompt }, ...history, { role: 'user', content: question }];
 
@@ -67,7 +80,6 @@ async function askAI(question, isDev, memKey) {
 
             if (res.status === 200 && res.data.choices && res.data.choices[0]) {
                 const answer = res.data.choices[0].message.content.trim();
-                // حفظ في الذاكرة
                 remember(memKey, 'user', question);
                 remember(memKey, 'assistant', answer);
                 return { success: true, text: answer };
@@ -91,10 +103,15 @@ module.exports.run = async ({ api, event, args, cfg }) => {
     const result = await askAI(question, isDev, memKey);
     
     if (!result.success) return api.sendMessage(`❌ ${result.error}`, event.threadID, event.messageID);
-    await sendReply(api, result.text, event.threadID, event.messageID);
+    
+    const sent = await sendReply(api, result.text, event.threadID, event.messageID);
+    // 👈 تسجيل رقم الرسالة في الذاكرة المؤقتة (حتى نعرف لاحقاً أنها رسالة ميرا)
+    if (sent.info && sent.info.messageID) {
+        aiMessages.set(String(sent.info.messageID), Date.now()); 
+    }
 };
 
-/* ───────── الاستماع للرسائل (بدون بادئة + الرد على البوت) ───────── */
+/* ───────── الاستماع للرسائل ───────── */
 module.exports.onMessage = async ({ api, event, cfg }) => {
     const text = String(event.body || '').trim();
     if (!text) return false;
@@ -109,14 +126,15 @@ module.exports.onMessage = async ({ api, event, cfg }) => {
         question = noPrefixMatch[1].trim();
     }
     
-    // 2️⃣ إذا قام الشخص بالرد (Reply) على رسالة من البوت نفسه
-    else if (event.type === 'message_reply' && event.messageReply) {
-        const repliedSender = String(event.messageReply.senderID);
-        const botID = String(api.getCurrentUserID());
+    // 2️⃣ إذا قام الشخص بالرد (Reply) على رسالة من الذكاء الاصطناعي فقط
+    else if (event.type === 'message_reply' && event.messageReply && event.messageReply.messageID) {
+        const repliedMsgID = String(event.messageReply.messageID);
         
-        // إذا كان يرد على البوت، نأخذ نص رسالته كسؤال
-        if (repliedSender === botID) {
+        // 👈 التحقق: هل الرسالة التي يرد عليها موجودة في قائمة رسائل ميرا؟
+        // إذا كان يرد على قائمة اوامر أو تحميل، فلن تكون في القائمة، وسيتم تجاهله.
+        if (aiMessages.has(repliedMsgID)) {
             question = text;
+            aiMessages.set(repliedMsgID, Date.now()); // تحديث وقت الرسالة لتستمر المحادثة
         }
     }
 
@@ -125,9 +143,8 @@ module.exports.onMessage = async ({ api, event, cfg }) => {
         return api.sendMessage("نعم؟ اسألني أي شيء.", event.threadID, event.messageID);
     }
 
-    // إذا وجدنا سؤالاً (سواء بمناداة الاسم أو بالرد على البوت)
+    // إذا وجدنا سؤالاً (سواء بمناداة الاسم أو بالرد على ميرا)
     if (question) {
-        // منع التكرار السريع
         const uid = String(event.senderID), now = Date.now();
         if (now - (lastAuto.get(uid) || 0) < AUTO_GAP) return true;
         lastAuto.set(uid, now);
@@ -137,7 +154,11 @@ module.exports.onMessage = async ({ api, event, cfg }) => {
         const result = await askAI(question, isDev, memKey);
         
         if (result.success) {
-            await sendReply(api, result.text, event.threadID, event.messageID);
+            const sent = await sendReply(api, result.text, event.threadID, event.messageID);
+            // 👈 تسجيل الرد الجديد أيضاً لكي يستطيع الشخص الرد عليه
+            if (sent.info && sent.info.messageID) {
+                aiMessages.set(String(sent.info.messageID), Date.now()); 
+            }
             return true;
         }
         return true;
