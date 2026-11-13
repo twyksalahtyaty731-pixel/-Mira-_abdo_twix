@@ -9,7 +9,6 @@ const log = require('./utils/log');
 
 const config = require('./config.json');
 global.config = config;
-// 👇 تم إصلاح الخطأ هنا (كان مكتوباً global. بدون client)
 global.client = { api: null, commands: new Map(), aliases: new Map(), cooldowns: new Map(), startedAt: Date.now() };
 global.data = { threadData: new Map() };
 global.language = {
@@ -169,8 +168,19 @@ async function handleMessage(api, event) {
     }
 }
 
+// ═══════════════════════════════════════════════
+// 🔄 تم تعديل الترتيب هنا: مكتبة صديقك أولاً!
+// ═══════════════════════════════════════════════
 function findFCA() {
-    const candidates = [process.env.FCA_MODULE, config.FCA_MODULE, 'nexus-fca', '@dongdev/fca-unofficial', 'fca-unofficial', 'ws3-fca'].filter(Boolean);
+    const candidates = [
+        process.env.FCA_MODULE, 
+        config.FCA_MODULE, 
+        '@dongdev/fca-unofficial', // 👈 مكتبة صديقك أصبحت الخيار الأول
+        'nexus-fca', 
+        'fca-unofficial', 
+        'ws3-fca'
+    ].filter(Boolean);
+    
     for (const name of candidates) {
         try {
             const lib = require(name);
@@ -241,7 +251,6 @@ function listenUntilDrop(api) {
             if (e) return finish(e);
             traceEvent(event);
             if (event.type === 'message' || event.type === 'message_reply') {
-                // 👇 تم تعطيل السلوك البشري هنا أيضاً لمنع أخطاء 404
                 // try { require('./utils/humanize').onIncoming(api, event); } catch (e) {}
                 handleMessage(api, event);
             }
@@ -267,7 +276,6 @@ function setupSession(api, ctx) {
         connectTimeout: 60000 
     });
     
-    // 👇 تم تعطيل ميزة "يكتب الآن" لمنع أخطاء 404 المزعجة
     // try { require('./utils/humanize').wrap(api); } catch (e) { log('تعذر تفعيل السلوك البشري: ' + e.message, 'warn'); }
     
     global.client.api = api;
