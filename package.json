@@ -10,16 +10,22 @@
     "node": ">=22.12"
   },
   "dependencies": {
+    "@dongdev/fca-unofficial": "latest",
     "@miraipr0ject/assets": "latest",
-    "nexus-fca": "^3.4.0",
     "@napi-rs/canvas": "^0.1.56",
     "axios": "^1.6.0",
     "chalk": "^4.1.2",
+    "form-data": "^4.0.0",
     "fs-extra": "^11.2.0",
     "gradient-string": "^2.0.2",
     "jpeg-js": "^0.4.4",
     "pngjs": "^7.0.0",
+    "sharp": "^0.35.0",
     "youtube-search-api": "latest",
     "ytdl-core": "latest"
+  },
+  "optionalDependencies": {
+    "biar-fca": "latest",
+    "nexus-fca": "latest"
   }
 }
