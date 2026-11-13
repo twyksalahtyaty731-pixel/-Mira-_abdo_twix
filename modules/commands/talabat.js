@@ -8,7 +8,7 @@ const HEADER = '⋆ 𝙈𝙄𝙍𝘼 ⋆';
 const LINE = '┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈';
 const EXPIRE = 30 * 60 * 1000; // صلاحية القائمة 30 دقيقة
 
-// القوائم المنتظرة للرد: "threadID:senderID" -> { ids, time }
+// القوائم المنتظرة للرد: "threadID:senderID" -> { ids, time, messageID }
 const waiting = new Map();
 
 module.exports.config = {
@@ -82,33 +82,45 @@ module.exports.run = async ({ api, event, cfg }) => {
         const queue = info.approvalQueue || [];
         const names = await getNames(api, queue.map(q => String(q.requesterID)));
 
-        waiting.set(`${threadID}:${senderID}`, {
-            ids: queue.map(q => String(q.requesterID)),
-            time: Date.now()
+        // إرسال القائمة وحفظ الـ messageID الخاص بها
+        api.sendMessage(buildList(info, queue, names), threadID, (err, msgInfo) => {
+            if (!err && msgInfo && msgInfo.messageID) {
+                waiting.set(`${threadID}:${senderID}`, {
+                    ids: queue.map(q => String(q.requesterID)),
+                    time: Date.now(),
+                    messageID: String(msgInfo.messageID)
+                });
+                console.log(`[طلبات] ✅ تم إرسال القائمة وحفظ الجلسة: ${msgInfo.messageID}`);
+            }
         });
-
-        api.sendMessage(buildList(info, queue, names), threadID);
     } catch (e) {
         console.log('[طلبات] ❌', e);
         api.sendMessage(`${HEADER}\n${LINE}\n❌ تعذر جلب الطلبات\n${e.error || e.message || e}`, threadID);
     }
 };
 
-// ───────── معالجة الرد ─────────
-module.exports.onEvent = async ({ api, event, cfg }) => {
-    if (event.type !== 'message_reply') return;
+// ───────── معالجة الرد (تم التعديل إلى onMessage) ─────────
+module.exports.onMessage = async ({ api, event, cfg }) => {
+    // 1️⃣ التأكد من أن الرسالة هي "رد" (Reply)
+    if (event.type !== 'message_reply' || !event.messageReply) return false;
 
     const key = `${event.threadID}:${event.senderID}`;
     const entry = waiting.get(key);
-    if (!entry) return;
+    
+    // 2️⃣ التأكد من وجود جلسة معلقة لهذا الشخص
+    if (!entry) return false;
 
+    // 3️⃣ التأكد من أن الشخص يرد على رسالة القائمة نفسها (وليس أي رسالة أخرى)
+    if (String(event.messageReply.messageID) !== String(entry.messageID)) return false;
+
+    // 4️⃣ التحقق من انتهاء الصلاحية
     if (Date.now() - entry.time > EXPIRE) {
         waiting.delete(key);
-        return;
+        return false;
     }
 
     const text = normalizeDigits(event.body).trim();
-    console.log('[طلبات] رد:', text, '| القائمة:', entry.ids.length);
+    console.log(`[طلبات] 📩 تم استلام رد: "${text}" | القائمة: ${entry.ids.length} طلب`);
 
     let targets = [];
     if (text === 'الكل') {
@@ -116,18 +128,20 @@ module.exports.onEvent = async ({ api, event, cfg }) => {
     } else if (/^\d+$/.test(text)) {
         const n = parseInt(text, 10);
         if (n < 1 || n > entry.ids.length) {
-            return api.sendMessage(`${HEADER}\n${LINE}\n⚠️ رقم غير صحيح`, event.threadID);
+            return api.sendMessage(`${HEADER}\n${LINE}\n⚠️ رقم غير صحيح`, event.threadID, event.messageID);
         }
         targets = [entry.ids[n - 1]];
     } else {
-        return;
+        return false; // ليس رقماً ولا كلمة "الكل"
     }
 
     // تحقق من الصلاحية مرة أخرى
     try {
         const info = await getInfo(api, event.threadID);
-        if (!isAllowed(info, cfg, event.senderID)) return;
-    } catch (e) { return; }
+        if (!isAllowed(info, cfg, event.senderID)) {
+            return api.sendMessage(`${HEADER}\n${LINE}\n⛔ هذا الأمر للأدمن فقط`, event.threadID, event.messageID);
+        }
+    } catch (e) { return false; }
 
     let ok = 0;
     const failed = [];
@@ -152,9 +166,16 @@ module.exports.onEvent = async ({ api, event, cfg }) => {
         body += `السبب: ${(lastErr && (lastErr.error || lastErr.message)) || 'غير معروف'}\n`;
         body += '(تأكد أن البوت أدمن في المجموعة)\n';
     }
-    api.sendMessage(body, event.threadID);
+    api.sendMessage(body, event.threadID, event.messageID);
 
-    // إزالة من تم قبولهم من القائمة المنتظرة
+    // إزالة من تم قبولهم بنجاح من القائمة المنتظرة
     entry.ids = entry.ids.filter(id => failed.includes(id) || !targets.includes(id));
-    if (!entry.ids.length) waiting.delete(key);
+    if (!entry.ids.length) {
+        waiting.delete(key);
+    } else {
+        // تحديث الرسالة لكي يتمكن الشخص من الرد مجدداً
+        waiting.set(key, { ...entry, messageID: String(event.messageID) });
+    }
+    
+    return true; // إخبار البوت أن الرسالة تمت معالجتها
 };
