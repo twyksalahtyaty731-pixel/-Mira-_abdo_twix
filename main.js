@@ -9,6 +9,7 @@ const log = require('./utils/log');
 
 const config = require('./config.json');
 global.config = config;
+// 👇 تم إصلاح الخطأ هنا (كان مكتوباً global. بدون client)
 global.client = { api: null, commands: new Map(), aliases: new Map(), cooldowns: new Map(), startedAt: Date.now() };
 global.data = { threadData: new Map() };
 global.language = {
@@ -83,7 +84,6 @@ async function runMessageHooks(ctx) {
 }
 
 async function runEventHooks(api, event) {
-    // 👇 سطر التتبع: سيطبع أي حدث يصل للبوت (مغادرة، دخول، إلخ)
     if (event.type === 'event') console.log(`[DEBUG EVENT] وصل حدث: ${event.logMessageType || 'غير معروف'}`);
 
     if (power.isOff(event.threadID)) return;
@@ -207,10 +207,6 @@ function loginOnce(login, appState) {
         const timer = setTimeout(() => reject(new Error('انتهت مهلة تسجيل الدخول')), LOGIN_TIMEOUT);
         
         const loginOptions = {
-            // ═══════════════════════════════════════════════
-            // ⚠️ تم تعطيل البروكسي مؤقتاً لأن مكتبة nexus-fca لا تدعمه في MQTT وتسبب انهيار الأحداث
-            // ═══════════════════════════════════════════════
-            // proxy: 'http://qwxzocqw:3224k1msvkkr@45.38.107.97:6014', 
             autoReconnect: true,      
             randomUserAgent: true,    
             forceLogin: true,         
@@ -245,7 +241,8 @@ function listenUntilDrop(api) {
             if (e) return finish(e);
             traceEvent(event);
             if (event.type === 'message' || event.type === 'message_reply') {
-                if (String(event.senderID) !== String(botID)) { try { require('./utils/humanize').onIncoming(api, event); } catch (e) {} }
+                // 👇 تم تعطيل السلوك البشري هنا أيضاً لمنع أخطاء 404
+                // try { require('./utils/humanize').onIncoming(api, event); } catch (e) {}
                 handleMessage(api, event);
             }
             else if (event.type === 'event') {
@@ -269,7 +266,10 @@ function setupSession(api, ctx) {
         autoReconnect: true, 
         connectTimeout: 60000 
     });
-    try { require('./utils/humanize').wrap(api); } catch (e) { log('تعذر تفعيل السلوك البشري: ' + e.message, 'warn'); }
+    
+    // 👇 تم تعطيل ميزة "يكتب الآن" لمنع أخطاء 404 المزعجة
+    // try { require('./utils/humanize').wrap(api); } catch (e) { log('تعذر تفعيل السلوك البشري: ' + e.message, 'warn'); }
+    
     global.client.api = api;
     botID = api.getCurrentUserID();
     log.loader(`تم تسجيل الدخول: ${botID} — بانتظار الرسائل...`);
