@@ -1,6 +1,5 @@
 /**
  * ◈ ───『 المشغّل الرئيسي لبوت كيرا 』─── ◈
- * يسجّل الدخول بالكوكيز (appstate.json) ويحمّل الأوامر من modules/commands
  */
 const fs = require('fs-extra');
 const path = require('path');
@@ -21,7 +20,6 @@ global.getText = (mod, key, ...args) => {
     return text;
 };
 
-// 🛡️ ذاكرة مؤقتة لمنع تكرار الرسائل
 global.processedMessages = new Set();
 
 const utils = require('./utils');
@@ -36,7 +34,6 @@ const { parseCookies } = require('./utils/cookies');
 process.on('unhandledRejection', e => log(String(e && e.stack || e), 'error'));
 process.on('uncaughtException', e => log(String(e && e.stack || e), 'error'));
 
-/* ─────────── تحميل الأوامر ─────────── */
 function loadCommands() {
     const dir = path.join(__dirname, 'modules', 'commands');
     for (const file of fs.readdirSync(dir).filter(f => f.endsWith('.js'))) {
@@ -57,11 +54,9 @@ function loadCommands() {
     log.loader(`إجمالي الأوامر: ${global.client.commands.size}`);
 }
 
-/* ─────────── معالجة الرسائل ─────────── */
 const xpCooldown = new Map();
 let botID = '';
 
-/** يسجّل المستخدم في Heba_DB/users.json ويجلب اسمه مرة واحدة أسبوعيًا */
 function recordUser(api, senderID, threadID) {
     try {
         users.touch(senderID, threadID);
@@ -75,7 +70,6 @@ function recordUser(api, senderID, threadID) {
     }
 }
 
-/** الأوامر التي تصدّر onMessage تستقبل الرسائل العادية (بلا بادئة) */
 async function runMessageHooks(ctx) {
     for (const cmd of global.client.commands.values()) {
         if (typeof cmd.onMessage !== 'function') continue;
@@ -88,8 +82,10 @@ async function runMessageHooks(ctx) {
     return false;
 }
 
-/** الأوامر التي تصدّر onEvent تستقبل أحداث المجموعة */
 async function runEventHooks(api, event) {
+    // 👇 سطر التتبع: سيطبع أي حدث يصل للبوت (مغادرة، دخول، إلخ)
+    if (event.type === 'event') console.log(`[DEBUG EVENT] وصل حدث: ${event.logMessageType || 'غير معروف'}`);
+
     if (power.isOff(event.threadID)) return;
     const ctx = { api, event, helpers, states, deco, cfg, utils };
     for (const cmd of global.client.commands.values()) {
@@ -103,14 +99,10 @@ async function handleMessage(api, event) {
     const { senderID, threadID, messageID, body } = event;
     if (!body || String(senderID) === String(botID)) return;
 
-    // ═══════════════════════════════════════════════
-    // 🛡️ 1. فلتر منع التكرار (Anti-Duplicate)
-    // ═══════════════════════════════════════════════
     if (global.processedMessages.has(messageID)) return;
     global.processedMessages.add(messageID);
     if (global.processedMessages.size > 2000) global.processedMessages.clear();
 
-    // موقوف في هذه المجموعة؟ لا نرد على أحد، إلا أمر ايقاف/تشغيل من المطور
     if (power.isOff(threadID) && !power.isPowerCommand(body, cfg.getPrefix(), cfg.isAdmin(String(senderID)))) return;
 
     recordUser(api, senderID, threadID);
@@ -135,9 +127,6 @@ async function handleMessage(api, event) {
     const cmd = commands.get(input) || commands.get(aliases.get(input));
     if (!cmd) return;
 
-    // ═══════════════════════════════════════════════
-    // 🛡️ 2. فلتر الأوامر الموقوفة (مع رد موردكاي)
-    // ═══════════════════════════════════════════════
     try {
         const disabledPath = path.join(__dirname, 'Heba_DB', 'disabled_cmds.json');
         if (fs.existsSync(disabledPath)) {
@@ -146,27 +135,17 @@ async function handleMessage(api, event) {
             
             if (threadDisabled.includes(cmd.config.name.toLowerCase())) {
                 const IMAGE_URL = 'https://i.ibb.co/99KXV2M9/8a0738e9512ea058115e0da036a7c804.jpg';
-
                 try {
                     const res = await axios.get(IMAGE_URL, { responseType: 'arraybuffer', timeout: 10000 });
                     const tmpPath = path.join(os.tmpdir(), `disabled_${Date.now()}.jpg`);
                     fs.writeFileSync(tmpPath, Buffer.from(res.data));
-
-                    return api.sendMessage({
-                        attachment: fs.createReadStream(tmpPath)
-                    }, threadID, () => {
+                    return api.sendMessage({ attachment: fs.createReadStream(tmpPath) }, threadID, () => {
                         try { fs.unlinkSync(tmpPath); } catch (e) {}
                     }, messageID);
-
-                } catch (e) {
-                    return; // تجاهل بصمت إذا فشل تحميل الصورة
-                }
+                } catch (e) { return; }
             }
         }
-    } catch (e) { 
-        log('خطأ في قراءة الأوامر الموقوفة: ' + e.message, 'warn'); 
-    }
-    // ═══════════════════════════════════════════════
+    } catch (e) { log('خطأ في قراءة الأوامر الموقوفة: ' + e.message, 'warn'); }
 
     const isAdmin = cfg.isAdmin(String(senderID));
     if (cmd.config.adminOnly && !isAdmin) {
@@ -177,9 +156,7 @@ async function handleMessage(api, event) {
     if (cdSeconds && !isAdmin) {
         const key = `${cmd.config.name}:${senderID}`;
         const left = (cooldowns.get(key) || 0) + cdSeconds * 1000 - now;
-        if (left > 0) {
-            return helpers.reply(api, event, deco.warning(`انتظر ${Math.ceil(left / 1000)} ثانية`));
-        }
+        if (left > 0) return helpers.reply(api, event, deco.warning(`انتظر ${Math.ceil(left / 1000)} ثانية`));
         cooldowns.set(key, now);
     }
 
@@ -192,25 +169,13 @@ async function handleMessage(api, event) {
     }
 }
 
-/* ─────────── تسجيل الدخول ─────────── */
 function findFCA() {
-    // ═══════════════════════════════════════════════
-    // 🔄 إضافة المكتبة الجديدة nexus-fca كخيار أول
-    // ═══════════════════════════════════════════════
-    const candidates = [
-        process.env.FCA_MODULE, 
-        config.FCA_MODULE, 
-        'nexus-fca', // 👈 المكتبة القوية هنا
-        '@dongdev/fca-unofficial', 
-        'fca-unofficial', 
-        'ws3-fca'
-    ].filter(Boolean);
-    
+    const candidates = [process.env.FCA_MODULE, config.FCA_MODULE, 'nexus-fca', '@dongdev/fca-unofficial', 'fca-unofficial', 'ws3-fca'].filter(Boolean);
     for (const name of candidates) {
         try {
             const lib = require(name);
             let version = '?';
-            try { version = require(name + '/package.json').version; } catch (e) { /* تجاهل */ }
+            try { version = require(name + '/package.json').version; } catch (e) { }
             log.loader(`مكتبة الدخول: ${name}@${version}`);
             return lib;
         } catch (e) { if (e.code !== 'MODULE_NOT_FOUND') throw e; }
@@ -218,16 +183,10 @@ function findFCA() {
     throw new Error('لم أجد مكتبة تسجيل الدخول. نفّذ: npm install');
 }
 
-/* ─────────── إعادة الاتصال التلقائي (محسّن) ─────────── */
-const MQTT_BACKOFF_BASE = 2000;       // 2 ثانية
-const MQTT_BACKOFF_MAX = 300000;      // 5 دقائق
-const MQTT_MAX_FAILURES = 5;          // التوقف بعد 5 محاولات فاشلة
-let mqttFailures = 0;
-let mqttDelay = MQTT_BACKOFF_BASE;
-
+const MQTT_BACKOFF_BASE = 2000, MQTT_BACKOFF_MAX = 300000, MQTT_MAX_FAILURES = 5;
+let mqttFailures = 0, mqttDelay = MQTT_BACKOFF_BASE;
 const LOGIN_TIMEOUT = 90000;
 const FATAL = /not logged in|checkpoint|login-approval|incorrect|expired|invalid|blocked/i;
-
 const DEBUG_EVENTS = process.env.DEBUG_EVENTS === '1';
 let traceLeft = 0;
 
@@ -247,24 +206,18 @@ function loginOnce(login, appState) {
     return new Promise((resolve, reject) => {
         const timer = setTimeout(() => reject(new Error('انتهت مهلة تسجيل الدخول')), LOGIN_TIMEOUT);
         
-        // ═══════════════════════════════════════════════
-        // 🌐 إعدادات البروكسي الثابت (تم تنظيف الرابط لحل مشكلة Invalid URL)
-        // ═══════════════════════════════════════════════
-        let PROXY_URL = process.env.PROXY_URL || 'http://qwxzocqw:3224k1msvkkr@45.38.107.97:6014';
-        
-        // هذا السطر يحذف أي مسافات فارغة وأي شرطة مائلة (/) في نهاية الرابط
-        PROXY_URL = PROXY_URL.trim().replace(/\/$/, '');
-        
         const loginOptions = {
-            proxy: PROXY_URL,         // الرابط النظيف
-            autoReconnect: true,      // تفعيل إعادة الاتصال التلقائي
-            randomUserAgent: true,    // تدوير بصمة المتصفح لتجنب الكشف
-            forceLogin: true,         // إجبار تسجيل الدخول
-            online: false             // إخفاء حالة الاتصال
+            // ═══════════════════════════════════════════════
+            // ⚠️ تم تعطيل البروكسي مؤقتاً لأن مكتبة nexus-fca لا تدعمه في MQTT وتسبب انهيار الأحداث
+            // ═══════════════════════════════════════════════
+            // proxy: 'http://qwxzocqw:3224k1msvkkr@45.38.107.97:6014', 
+            autoReconnect: true,      
+            randomUserAgent: true,    
+            forceLogin: true,         
+            online: false             
         };
 
         try {
-            // تمرير الكوكيز كخيار أول، وإعدادات البروكسي كخيار ثاني
             login({ appState }, loginOptions, (err, api) => {
                 clearTimeout(timer);
                 if (err) return reject(new Error(errMsg(err)));
@@ -306,7 +259,6 @@ function listenUntilDrop(api) {
 }
 
 function setupSession(api, ctx) {
-    // إعدادات محسنة للاتصال
     api.setOptions({ 
         listenEvents: true, 
         selfListen: false, 
@@ -341,7 +293,6 @@ async function runWithAutoReconnect(appState, ctx) {
             log.loader('جارٍ تسجيل الدخول إلى فيسبوك...');
             const api = await loginOnce(login, appState);
             appState = setupSession(api, ctx) || appState;
-            
             mqttFailures = 0;
             mqttDelay = MQTT_BACKOFF_BASE;
 
@@ -364,7 +315,6 @@ async function runWithAutoReconnect(appState, ctx) {
 
         if (mqttFailures >= MQTT_MAX_FAILURES) {
             log(`❌ تكرر فشل الاتصال ${mqttFailures} مرات. تم إيقاف المحاولة لحماية الحساب.`, 'error');
-            log(`💡 يرجى تجديد ملف appstate.json (الكوكيز) ثم إعادة تشغيل البوت.`, 'error');
             process.exit(1); 
         }
 
