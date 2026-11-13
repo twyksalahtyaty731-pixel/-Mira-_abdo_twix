@@ -22,14 +22,9 @@ const TOGGLE_CANDIDATES = ['changeApprovalMode', 'setApprovalMode', 'changeGroup
 const toLatin = t => String(t || '').replace(/[٠-٩]/g, c => String(c.charCodeAt(0) - 0x660));
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-// ═══════════════════════════════════════════════
-// 🛠️ دالة جلب معلومات المجموعة (محدثة)
-// ═══════════════════════════════════════════════
 const getInfo = (api, tid) => new Promise(resolve => {
     try {
-        // المحاولة 1: الطريقة العادية
         api.getThreadInfo(tid, (err, info) => {
-            // إذا لم يتم إرجاع approvalQueue، نحاول تمريره كحقل مطلوب
             if (err || !info || !info.approvalQueue) {
                 try {
                     api.getThreadInfo(tid, ["approvalQueue", "name", "adminIDs", "approvalMode"], (err2, info2) => {
@@ -88,19 +83,23 @@ async function setApproval(api, tid, want) {
     return { error: 'unchanged' };
 }
 
+// ═══════════════════════════════════════════════
+// 🛠️ دالة القبول (تم إصلاحها لتستخدم المصفوفة [ ])
+// ═══════════════════════════════════════════════
 async function acceptOne(api, tid, uid) {
     return new Promise((resolve) => {
         const doAdd = (callback) => {
             if (typeof api.acceptUsersToGroup === 'function') {
                 api.acceptUsersToGroup([String(uid)], String(tid), (err) => {
                     if (err) {
-                        api.addUserToGroup(String(uid), String(tid), callback);
+                        api.addUserToGroup([String(uid)], String(tid), callback);
                     } else {
                         callback(null);
                     }
                 });
             } else {
-                api.addUserToGroup(String(uid), String(tid), callback);
+                // 👇 تم وضع الآيدي داخل قوسين مربعين [ ] لأن المكتبة الجديدة تطلب مصفوفة
+                api.addUserToGroup([String(uid)], String(tid), callback);
             }
         };
 
@@ -110,6 +109,8 @@ async function acceptOne(api, tid, uid) {
                 return resolve({ ok: true, unsure: true }); 
             }
             if (err) return resolve({ ok: false, why: errText(err) });
+            
+            console.log(`[طلبات] ✅ تم إرسال طلب الإضافة للعضو ${uid} بنجاح.`);
             resolve({ ok: true }); 
         });
     });
@@ -137,7 +138,6 @@ async function buildMenu(api, tid, deco, note) {
     const info = await getInfo(api, tid);
     if (!info) return { text: deco.errorBox('تعذّر قراءة معلومات المجموعة، حاول لاحقًا'), ids: [] };
 
-    // 👇 سطر لطباعة المعلومات في سجلات Render لمعرفة السبب
     console.log('--- [طلبات] معلومات المجموعة ---');
     console.log('approvalMode:', info.approvalMode);
     console.log('approvalQueue:', info.approvalQueue);
