@@ -19,16 +19,10 @@ function saveState(state) {
     } catch (e) {}
 }
 
-// ═══════════════════════════════════════════════
-// ⏱️ تتبع من غادر مؤخراً (لمنع حلقة لا نهائية إذا غادر الشخص وتم إرجاعه وغادر مجدداً)
-// ═══════════════════════════════════════════════
-const recentLeaves = new Map();
-const LEAVE_COOLDOWN = 5 * 60 * 1000; // 5 دقائق
-
 module.exports.config = {
     name: 'شقط',
     aliases: ['شفط'],
-    description: 'يراقب المجموعة ويرجع أي شخص يغادرها (للمطور فقط)',
+    description: 'يراقب المجموعة ويرجع أي شخص يغادرها بنفسه (للمطور فقط)',
     usage: 'شقط (لتفعيل/إيقاف)',
     category: 'admin',
     cooldown: 5,
@@ -37,79 +31,71 @@ module.exports.config = {
 
 module.exports.run = async ({ api, event, helpers, cfg }) => {
     const { threadID, senderID } = event;
-    
+
     // 🔒 حماية المطور
     if (!cfg.isAdmin(String(senderID))) {
         return helpers.reply(api, event, "من انت ايها الفلاح ؛-؛");
     }
-    
+
     const state = loadState();
     const isOn = !!state[String(threadID)];
-    
+
     if (isOn) {
-        // إيقاف الوضع
         delete state[String(threadID)];
         saveState(state);
         return helpers.reply(api, event, "🔴 تم إيقاف وضع الشفط.\nلن يتم إرجاع من يغادر المجموعة.");
     } else {
-        // تفعيل الوضع
         state[String(threadID)] = true;
         saveState(state);
-        return helpers.reply(api, event, "🟢 تم تفعيل وضع الشفط!\nأي شخص يغادر هذه المجموعة سيتم إرجاعه فوراً.");
+        return helpers.reply(api, event, "🟢 تم تفعيل وضع الشفط!\nأي شخص يغادر هذه المجموعة بنفسه سيتم إرجاعه فوراً.");
     }
 };
 
 // ═══════════════════════════════════════════════
-// 👁️ مراقبة الأحداث (متى يغادر شخص)
+// 👁️ مراقبة الأحداث (متى يغادر شخص بنفسه)
 // ═══════════════════════════════════════════════
 module.exports.onEvent = async ({ api, event }) => {
-    if (event.type !== 'event') return;
-    
     // فحص نوع الحدث (المغادرة)
     const logType = String(event.logMessageType || '');
-    const isLeave = /unsubscribe|leave|remove/i.test(logType);
-    if (!isLeave) return;
-    
+    if (!/unsubscribe|leave|remove/i.test(logType)) return;
+
     // هل الوضع مفعّل في هذه المجموعة؟
     const state = loadState();
     if (!state[String(event.threadID)]) return;
-    
+
     // معرفة من غادر
-    let leftID = null;
-    if (event.logMessageData) {
-        leftID = event.logMessageData.leftParticipantFbId || 
-                 event.logMessageData.unsubscribedParticipantFbId ||
-                 event.logMessageData.userFbId;
-    }
+    const data = event.logMessageData || {};
+    const leftID = data.leftParticipantFbId ||
+                   data.unsubscribedParticipantFbId ||
+                   data.userFbId;
+
     if (!leftID) return;
-    
-    const botID = String(api.getCurrentUserID());
-    
+
     // تجاهل إذا كان البوت نفسه هو من غادر
-    if (String(leftID) === botID) return;
-    
-    // منع الحلقة اللانهائية (إذا غادر مرتين خلال 5 دقائق، لا نرجعه فوراً)
-    const key = `${event.threadID}:${leftID}`;
-    const lastLeave = recentLeaves.get(key) || 0;
-    if (Date.now() - lastLeave < LEAVE_COOLDOWN) {
-        console.log(`[شقط] ⚠️ العضو ${leftID} غادر مرتين متتاليتين، تم تجاهله.`);
+    if (String(leftID) === String(api.getCurrentUserID())) return;
+
+    // ✅ إرجاع من غادر بنفسه فقط (تجاهل المطرودين)
+    if (String(event.author) !== String(leftID)) {
+        console.log(`[شقط] ⏭️ ${leftID} طُرد بواسطة ${event.author}، تم تجاهله.`);
         return;
     }
-    recentLeaves.set(key, Date.now());
-    
-    // انتظار 3 ثوانٍ قبل الإرجاع (حتى لا يبدو البوت كأنه "روبوت" ويرصد)
-    await new Promise(r => setTimeout(r, 3000));
-    
-    // إرجاع الشخص
-    try {
-        api.addUserToGroup(String(leftID), String(event.threadID), (err) => {
-            if (err) {
-                console.log(`[شقط] ❌ فشل إرجاع العضو ${leftID}:`, err.error || err);
-            } else {
-                console.log(`[شقط] ✅ تم إرجاع العضو ${leftID} إلى المجموعة`);
-            }
-        });
-    } catch (e) {
-        console.log('[شقط] خطأ غير متوقع:', e.message);
+
+    const tryAdd = () => new Promise(resolve => {
+        try {
+            api.addUserToGroup(String(leftID), String(event.threadID), (err) => resolve(err || null));
+        } catch (e) {
+            resolve(e);
+        }
+    });
+
+    // محاولة الإرجاع حتى 3 مرات مع زيادة الانتظار
+    for (let i = 1; i <= 3; i++) {
+        await new Promise(r => setTimeout(r, 3000 * i));
+        const err = await tryAdd();
+        if (!err) {
+            console.log(`[شقط] ✅ تم إرجاع العضو ${leftID} إلى المجموعة`);
+            return;
+        }
+        console.log(`[شقط] ❌ محاولة ${i} فشلت للعضو ${leftID}:`, err.error || err.message || err);
     }
 };
