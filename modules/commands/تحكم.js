@@ -1,261 +1,326 @@
-/**
- * 🎮 .تحكم — التحكم بالبوت عن بعد في مجموعة محددة (للمطور فقط)
- *
- * الطريقة:
- *   1) .تحكم             → يعرض قائمة بكل المجموعات
- *   2) ردّ برقم          → يحدد تلك المجموعة كهدف
- *   3) .تحكم <أمر>       → ينفذ الأمر في المجموعة المحددة
- *   4) .تحكم خروج        → إلغاء التحكم
- *   5) .تحكم حالة        → عرض المجموعة المحددة حالياً
- */
-const fs = require('fs-extra');
-const path = require('path');
+// ═══════════════════════════════════════════════
+// 🎛️ أمر التحكم: اختيار مجموعة والتحكم بالبوت فيها من أي مكان (للمطور فقط)
+//
+//   .تحكم                  ← عرض المجموعات، ثم رد برقم المجموعة (أو .تحكم 3)
+//   .تحكم ارسال <نص>       ← إرسال رسالة في المجموعة المختارة
+//   .تحكم معلومات          ← معلومات المجموعة
+//   .تحكم اعضاء            ← قائمة الأعضاء بأرقام
+//   .تحكم طرد <رقم|ايدي>   ← طرد عضو (رقمه من قائمة الأعضاء أو ايديه)
+//   .تحكم اضافة <ايدي>     ← إضافة شخص
+//   .تحكم اسم <اسم جديد>   ← تغيير اسم المجموعة
+//   .تحكم غادر             ← يغادر البوت المجموعة المختارة
+//   .تحكم خروج             ← إلغاء اختيار المجموعة
+// ═══════════════════════════════════════════════
 
 const HEADER = '⋆ 𝙈𝙄𝙍𝘼 ⋆';
 const LINE = '┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈';
-const DIR = path.join(__dirname, '..', '..', 'Heba_DB');
-const FILE = path.join(DIR, 'control_state.json');
+const MAX_GROUPS = 50;
 
-const SESSION_TTL = 15 * 60 * 1000; // 15 دقيقة
-
-function readAll() {
-    try { return JSON.parse(fs.readFileSync(FILE, 'utf8')); } catch (e) { return {}; }
-}
-function writeAll(o) {
-    fs.mkdirSync(DIR, { recursive: true });
-    const tmp = `${FILE}.${process.pid}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify(o, null, 2));
-    fs.renameSync(tmp, FILE);
-}
-
-// جلسات عرض القوائم (لكل مطور)
-const listSessions = new Map();
+// الجلسات: senderID -> { list: [{id,name,count}], target: {id,name}, members: [ids], listMsgID }
+const sessions = new Map();
 
 module.exports.config = {
     name: 'تحكم',
-    aliases: ['control', 'تحكم_مجموعة'],
-    description: 'عرض المجموعات والتحكم بالبوت في مجموعة محددة (للمطور فقط)',
-    usage: 'تحكم | تحكم <أمر> | تحكم خروج | تحكم حالة',
+    aliases: ['تحكّم'],
+    description: 'اختيار مجموعة والتحكم بالبوت فيها (للمطور فقط)',
+    usage: 'تحكم',
     category: 'admin',
     cooldown: 2,
     adminOnly: false
 };
 
-module.exports.run = async ({ api, event, args, helpers, deco, cfg, states, utils }) => {
+// ───────── دوال مساعدة ─────────
+const normalizeDigits = s => String(s || '')
+    .replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d))
+    .replace(/[۰-۹]/g, d => '۰۱۲۳۴۵۶۷۸۹'.indexOf(d));
+
+const cut = (s, n) => (s.length > n ? s.slice(0, n - 1) + '…' : s);
+
+const getThreadList = (api) => new Promise((resolve, reject) => {
+    try {
+        api.getThreadList(MAX_GROUPS, null, ['INBOX'], (err, list) => err ? reject(err) : resolve(list || []));
+    } catch (e) { reject(e); }
+});
+
+const getInfo = (api, threadID) => new Promise((resolve, reject) => {
+    api.getThreadInfo(String(threadID), (err, info) => err ? reject(err) : resolve(info));
+});
+
+const getUsers = (api, ids) => new Promise(resolve => {
+    if (!ids.length) return resolve({});
+    try {
+        api.getUserInfo(ids, (err, data) => resolve(err ? {} : (data || {})));
+    } catch (e) { resolve({}); }
+});
+
+const sendMsg = (api, body, threadID) => new Promise(resolve => {
+    try {
+        api.sendMessage(body, String(threadID), (err, info) => resolve({ err: err || null, info }));
+    } catch (e) { resolve({ err: e, info: null }); }
+});
+
+const errText = e => (e && (e.errorDescription || e.error || e.message)) || String(e);
+
+const requireTarget = (session) => session && session.target;
+
+// ───────── اختيار مجموعة من القائمة ─────────
+async function selectGroup(api, session, n) {
+    if (!session || !session.list || !session.list.length) {
+        return { ok: false, msg: `${HEADER}\n${LINE}\n⚠️ اكتب .تحكم أولاً لعرض المجموعات` };
+    }
+    if (n < 1 || n > session.list.length) {
+        return { ok: false, msg: `${HEADER}\n${LINE}\n⚠️ رقم غير صحيح (1 - ${session.list.length})` };
+    }
+    const g = session.list[n - 1];
+    try {
+        await getInfo(api, g.id); // تأكد أن البوت ما زال فيها
+    } catch (e) {
+        return { ok: false, msg: `${HEADER}\n${LINE}\n❌ تعذر الوصول لهذه المجموعة\n${errText(e)}` };
+    }
+    session.target = { id: g.id, name: g.name };
+    session.members = [];
+    return {
+        ok: true,
+        msg: `${HEADER}\n${LINE}\n✅ تم اختيار المجموعة\n📛 ${g.name}\n${LINE}\n` +
+             `الآن اكتب مثلاً:\n❯ .تحكم ارسال مرحباً\n❯ .تحكم معلومات\n❯ .تحكم اعضاء\n❯ .تحكم خروج`
+    };
+}
+
+// ───────── عرض القائمة ─────────
+async function showGroups(api, event, session) {
+    const threads = await getThreadList(api);
+    const groups = threads
+        .filter(t => t && (t.isGroup === true || t.isGroup === undefined))
+        .filter(t => t.threadID)
+        .map(t => ({
+            id: String(t.threadID),
+            name: (t.name && String(t.name).trim()) || 'بدون اسم',
+            count: (t.participants && t.participants.length) || (t.participantIDs && t.participantIDs.length) || 0
+        }));
+
+    if (!groups.length) {
+        return api.sendMessage(`${HEADER}\n${LINE}\n⚠️ لا توجد مجموعات`, event.threadID);
+    }
+
+    session.list = groups;
+    let body = `${HEADER}\n${LINE}\n🎛️ تحكم\n✦ اختر مجموعة ✦\n${LINE}\n`;
+    groups.forEach((g, i) => {
+        body += `${i + 1} ❯ ${cut(g.name, 32)}${g.count ? ` (${g.count})` : ''}\n`;
+    });
+    body += `${LINE}\n↩️ رد على هذه الرسالة برقم المجموعة`;
+    if (session.target) body += `\n📌 المختارة حالياً: ${cut(session.target.name, 30)}`;
+
+    const { err, info } = await sendMsg(api, body, event.threadID);
+    if (!err && info && info.messageID) session.listMsgID = String(info.messageID);
+}
+
+// ═══════════════════════════════════════════════
+// 🚀 الأمر
+// ═══════════════════════════════════════════════
+module.exports.run = async ({ api, event, cfg }) => {
     const { threadID, senderID } = event;
     const uid = String(senderID);
-    const tid = String(threadID);
+    const reply = body => api.sendMessage(body, threadID);
 
-    // للمطور فقط
-    if (!cfg.isAdmin(uid)) {
-        return helpers.reply(api, event, `${HEADER}\n${LINE}\n⛔ هذا الأمر للمطور فقط\n${LINE}`);
+    // 🔒 للمطور فقط
+    if (!(cfg && cfg.isAdmin && cfg.isAdmin(uid))) {
+        return reply(`${HEADER}\n${LINE}\n⛔ هذا الأمر للمطور فقط`);
     }
 
-    const state = readAll();
-    const current = state[uid];
-    const a0 = String(args[0] || '').toLowerCase();
+    if (!sessions.has(uid)) sessions.set(uid, { list: [], target: null, members: [], listMsgID: null });
+    const session = sessions.get(uid);
 
-    // ═══════════════════════════════════════════
-    // 1. .تحكم خروج — إنهاء التحكم
-    // ═══════════════════════════════════════════
-    if (['خروج', 'الغاء', 'إلغاء', 'exit', 'cancel'].includes(a0)) {
-        delete state[uid];
-        writeAll(state);
-        return helpers.reply(api, event, `${HEADER}\n${LINE}\n✅ تم إلغاء التحكم\n🔓 البوت عاد للعمل الطبيعي\n${LINE}`);
-    }
+    const raw = normalizeDigits(event.body).trim();
+    const parts = raw.split(/\s+/);
+    const sub = parts[1] || '';
+    const rest = raw.split(/\s+/).slice(2).join(' ').trim();
 
-    // ═══════════════════════════════════════════
-    // 2. .تحكم حالة — عرض الحالة
-    // ═══════════════════════════════════════════
-    if (a0 === 'حالة' || a0 === 'status') {
-        if (!current) {
-            return helpers.reply(api, event, `${HEADER}\n${LINE}\n📭 لا توجد مجموعة محددة\n💡 اكتب .تحكم لعرض المجموعات\n${LINE}`);
-        }
-        return helpers.reply(api, event,
-`${HEADER}
-${LINE}
-📊 حالة التحكم
-${LINE}
-🎯 المجموعة: ${current.name || 'بدون اسم'}
-🆔 ${current.threadID}
-${LINE}
-💡 .تحكم <أمر> → تنفيذ أمر فيها
-💡 .تحكم خروج → إلغاء التحكم
-${LINE}`
-        );
-    }
-
-    // ═══════════════════════════════════════════
-    // 3. .تحكم <أمر> — تنفيذ أمر في المجموعة المحددة
-    // ═══════════════════════════════════════════
-    if (current && args.length > 0) {
-        let cmdText = args.join(' ').trim();
-        const prefix = cfg.getPrefix();
-
-        // إزالة البادئة إن وُجدت
-        if (cmdText.startsWith(prefix)) cmdText = cmdText.slice(prefix.length).trim();
-
-        const parts = cmdText.split(/\s+/);
-        const cmdName = (parts.shift() || '').toLowerCase();
-        const cmdArgs = parts;
-
-        // منع تنفيذ أمر التحكم داخل نفسه (recursion)
-        if (cmdName === 'تحكم' || cmdName === 'control') {
-            return helpers.reply(api, event, `${HEADER}\n${LINE}\n⚠️ لا يمكن تنفيذ أمر التحكم داخل نفسه\n${LINE}`);
-        }
-
-        const cmd = global.client.commands.get(cmdName) ||
-                    global.client.commands.get(global.client.aliases.get(cmdName));
-
-        if (!cmd) {
-            return helpers.reply(api, event, `${HEADER}\n${LINE}\n❌ الأمر «${cmdName}» غير موجود\n${LINE}`);
-        }
-
-        // بناء حدث وهمي يستهدف المجموعة المحددة
-        const fakeEvent = {
-            threadID: String(current.threadID),
-            messageID: null,
-            senderID: uid,
-            body: `${prefix}${cmdName} ${cmdArgs.join(' ')}`.trim(),
-            type: 'message',
-            isGroup: true,
-            mentions: {},
-            attachments: [],
-            messageReply: null,
-            timestamp: Date.now()
-        };
-
-        try {
-            await cmd.run({
-                api,
-                event: fakeEvent,
-                args: cmdArgs,
-                helpers,
-                states,
-                deco,
-                cfg,
-                utils
-            });
-
-            // تأكيد للمطور في محادثته الحالية
-            return helpers.reply(api, event,
-`${HEADER}
-${LINE}
-✅ تم تنفيذ الأمر بنجاح
-${LINE}
-📌 الأمر: ${prefix}${cmdName}
-📁 ${current.name || 'بدون اسم'}
-🆔 ${current.threadID}
-${LINE}`
-            );
-        } catch (e) {
-            console.error('[تحكم] خطأ في التنفيذ:', e);
-            return helpers.reply(api, event, `${HEADER}\n${LINE}\n❌ فشل التنفيذ:\n${e.message || e.error || e}\n${LINE}`);
-        }
-    }
-
-    // ═══════════════════════════════════════════
-    // 4. .تحكم — عرض قائمة المجموعات
-    // ═══════════════════════════════════════════
     try {
-        const threads = await new Promise((resolve, reject) => {
-            api.getThreadList(50, null, ['INBOX'], (err, list) => {
-                if (err) reject(err);
-                else resolve(list || []);
+        // بلا وسائط: عرض المجموعات
+        if (!sub) return await showGroups(api, event, session);
+
+        // اختيار برقم مباشرة: .تحكم 3
+        if (/^\d+$/.test(sub)) {
+            const r = await selectGroup(api, session, parseInt(sub, 10));
+            return reply(r.msg);
+        }
+
+        // إلغاء الاختيار
+        if (sub === 'خروج') {
+            session.target = null;
+            session.members = [];
+            return reply(`${HEADER}\n${LINE}\n🔓 تم إلغاء اختيار المجموعة`);
+        }
+
+        // باقي الأوامر تحتاج مجموعة مختارة
+        if (!requireTarget(session)) {
+            return reply(`${HEADER}\n${LINE}\n⚠️ اختر مجموعة أولاً بكتابة .تحكم`);
+        }
+        const target = session.target;
+
+        // ───── إرسال ─────
+        if (sub === 'ارسال' || sub === 'إرسال') {
+            if (!rest) return reply(`${HEADER}\n${LINE}\n⚠️ اكتب النص بعد الأمر\nمثال: .تحكم ارسال مرحباً`);
+            const { err } = await sendMsg(api, rest, target.id);
+            return reply(err
+                ? `${HEADER}\n${LINE}\n❌ فشل الإرسال\n${errText(err)}`
+                : `${HEADER}\n${LINE}\n✅ تم الإرسال في:\n📛 ${target.name}`);
+        }
+
+        // ───── معلومات ─────
+        if (sub === 'معلومات') {
+            const info = await getInfo(api, target.id);
+            const admins = (info.adminIDs || []).length;
+            const members = (info.participantIDs || []).length;
+            const botID = String(api.getCurrentUserID());
+            const botIsAdmin = (info.adminIDs || []).some(a => String(a.id || a) === botID);
+            return reply(
+                `${HEADER}\n${LINE}\n✦ معلومات المجموعة ✦\n${LINE}\n` +
+                `📛 الاسم: ${info.threadName || info.name || target.name}\n` +
+                `🆔 الايدي: ${target.id}\n` +
+                `👥 الأعضاء: ${members}\n` +
+                `👑 الأدمن: ${admins}\n` +
+                `🛡️ البوت أدمن: ${botIsAdmin ? 'نعم ✅' : 'لا ❌'}\n` +
+                `🔐 الموافقة على الطلبات: ${info.approvalMode ? 'مفعّلة' : 'متوقفة'}\n` +
+                `📥 الطلبات المعلّقة: ${(info.approvalQueue || []).length}`
+            );
+        }
+
+        // ───── أعضاء ─────
+        if (sub === 'اعضاء' || sub === 'أعضاء') {
+            const info = await getInfo(api, target.id);
+            const ids = (info.participantIDs || []).map(String);
+            const users = await getUsers(api, ids);
+            const adminSet = new Set((info.adminIDs || []).map(a => String(a.id || a)));
+            session.members = ids;
+
+            let body = `${HEADER}\n${LINE}\n✦ أعضاء ${cut(target.name, 24)} ✦\n${LINE}\n`;
+            ids.forEach((id, i) => {
+                const name = (users[id] && users[id].name) || id;
+                body += `${i + 1} ❯ ${cut(name, 28)}${adminSet.has(id) ? ' 👑' : ''}\n`;
             });
-        });
-
-        const groups = threads.filter(t => t.isGroup && t.isSubscribed);
-
-        if (groups.length === 0) {
-            return helpers.reply(api, event, `${HEADER}\n${LINE}\n📭 لا توجد مجموعات متاحة\n${LINE}`);
+            body += `${LINE}\nللطرد: .تحكم طرد <الرقم>`;
+            return reply(body);
         }
 
-        // حفظ الجلسة
-        listSessions.set(`${tid}:${uid}`, {
-            groups: groups.map(g => ({ threadID: String(g.threadID), name: g.name || 'بدون اسم' })),
-            messageID: String(event.messageID),
-            at: Date.now()
-        });
-
-        // تنظيف الجلسات القديمة
-        for (const [k, v] of listSessions) {
-            if (Date.now() - v.at > SESSION_TTL) listSessions.delete(k);
+        // ───── طرد ─────
+        if (sub === 'طرد') {
+            if (!rest) return reply(`${HEADER}\n${LINE}\n⚠️ اكتب رقم العضو أو ايديه\nمثال: .تحكم طرد 5`);
+            let victim = rest.split(/\s+/)[0];
+            if (/^\d{1,4}$/.test(victim)) {
+                const idx = parseInt(victim, 10);
+                if (!session.members.length) {
+                    return reply(`${HEADER}\n${LINE}\n⚠️ اكتب .تحكم اعضاء أولاً لعرض الأرقام`);
+                }
+                victim = session.members[idx - 1];
+                if (!victim) return reply(`${HEADER}\n${LINE}\n⚠️ رقم غير صحيح`);
+            }
+            if (String(victim) === String(api.getCurrentUserID())) {
+                return reply(`${HEADER}\n${LINE}\n⚠️ لا يمكن طرد البوت نفسه، استخدم .تحكم غادر`);
+            }
+            if (cfgIsDev(cfg, victim)) {
+                return reply(`${HEADER}\n${LINE}\n⚠️ لا يمكن طرد المطور`);
+            }
+            const err = await new Promise(res => {
+                try { api.removeUserFromGroup(String(victim), String(target.id), e => res(e || null)); }
+                catch (e) { res(e); }
+            });
+            return reply(err
+                ? `${HEADER}\n${LINE}\n❌ فشل الطرد\n${errText(err)}\n(تأكد أن البوت أدمن)`
+                : `${HEADER}\n${LINE}\n🚷 تم الطرد من:\n📛 ${target.name}`);
         }
 
-        let text = `${HEADER}\n${LINE}\n📋 المجموعات المتاحة (${groups.length})\n${LINE}\n`;
-        groups.slice(0, 30).forEach((g, i) => {
-            const mark = current && String(g.threadID) === String(current.threadID) ? ' 🎯' : '';
-            text += `${i + 1} ❯ ${g.name || 'بدون اسم'}${mark}\n   🆔 ${g.threadID}\n`;
-        });
-
-        if (groups.length > 30) {
-            text += `\n... و${groups.length - 30} أخرى\n`;
+        // ───── اضافة ─────
+        if (sub === 'اضافة' || sub === 'إضافة') {
+            const who = (rest.split(/\s+/)[0] || '').trim();
+            if (!/^\d{6,}$/.test(who)) {
+                return reply(`${HEADER}\n${LINE}\n⚠️ اكتب ايدي الشخص\nمثال: .تحكم اضافة 1000123456789`);
+            }
+            const err = await new Promise(res => {
+                try { api.addUserToGroup(who, String(target.id), e => res(e || null)); }
+                catch (e) { res(e); }
+            });
+            return reply(err
+                ? `${HEADER}\n${LINE}\n❌ فشلت الإضافة\n${errText(err)}`
+                : `${HEADER}\n${LINE}\n✅ تمت الإضافة إلى:\n📛 ${target.name}`);
         }
 
-        text += `\n${LINE}\n`;
-        if (current) {
-            text += `🎯 المجموعة الحالية: ${current.name}\n`;
-            text += `💡 .تحكم <أمر> → تنفيذ أمر فيها\n`;
-            text += `💡 .تحكم خروج → إلغاء التحكم\n`;
-        } else {
-            text += `↩️ رد على هذه الرسالة برقم المجموعة للتحكم بها\n`;
+        // ───── اسم ─────
+        if (sub === 'اسم') {
+            if (!rest) return reply(`${HEADER}\n${LINE}\n⚠️ اكتب الاسم الجديد\nمثال: .تحكم اسم مجموعة الأصدقاء`);
+            const err = await new Promise(res => {
+                try { api.setTitle(rest, String(target.id), e => res(e || null)); }
+                catch (e) { res(e); }
+            });
+            if (!err) target.name = rest;
+            return reply(err
+                ? `${HEADER}\n${LINE}\n❌ فشل تغيير الاسم\n${errText(err)}`
+                : `${HEADER}\n${LINE}\n✅ تم تغيير الاسم إلى:\n📛 ${rest}`);
         }
-        text += `${LINE}`;
 
-        return helpers.reply(api, event, text);
+        // ───── غادر ─────
+        if (sub === 'غادر') {
+            const err = await new Promise(res => {
+                try { api.removeUserFromGroup(String(api.getCurrentUserID()), String(target.id), e => res(e || null)); }
+                catch (e) { res(e); }
+            });
+            if (!err) { session.target = null; session.members = []; }
+            return reply(err
+                ? `${HEADER}\n${LINE}\n❌ فشلت المغادرة\n${errText(err)}`
+                : `${HEADER}\n${LINE}\n👋 غادر البوت المجموعة`);
+        }
+
+        // ───── غير معروف: قائمة المساعدة ─────
+        return reply(
+            `${HEADER}\n${LINE}\n🎛️ أوامر التحكم\n${LINE}\n` +
+            `📌 المختارة: ${cut(target.name, 28)}\n${LINE}\n` +
+            `❯ ارسال <نص>\n❯ معلومات\n❯ اعضاء\n❯ طرد <رقم|ايدي>\n` +
+            `❯ اضافة <ايدي>\n❯ اسم <اسم جديد>\n❯ غادر\n❯ خروج`
+        );
     } catch (e) {
-        console.error('[تحكم] خطأ في جلب المجموعات:', e);
-        return helpers.reply(api, event, `${HEADER}\n${LINE}\n❌ تعذر جلب المجموعات:\n${e.message || e.error || e}\n${LINE}`);
+        console.log('[تحكم] ❌', e);
+        reply(`${HEADER}\n${LINE}\n❌ حدث خطأ\n${errText(e)}`);
     }
 };
 
+function cfgIsDev(cfg, uid) {
+    return !!(cfg && cfg.isAdmin && cfg.isAdmin(String(uid)));
+}
+
 // ═══════════════════════════════════════════════
-// 📩 استقبال الرد برقم المجموعة
+// 📩 الرد على القائمة برقم المجموعة
 // ═══════════════════════════════════════════════
-module.exports.onMessage = async ({ api, event, cfg }) => {
+const seen = new Set();
+
+async function onReply({ api, event, cfg }) {
     if (event.type !== 'message_reply' || !event.messageReply) return false;
 
     const uid = String(event.senderID);
-    const tid = String(event.threadID);
+    const session = sessions.get(uid);
+    if (!session || !session.list || !session.list.length) return false;
 
-    if (!cfg.isAdmin(uid)) return false;
+    // لازم يكون الرد على قائمة التحكم نفسها
+    const repliedID = String(event.messageReply.messageID || '');
+    const repliedBody = String(event.messageReply.body || '');
+    const isOurList = (session.listMsgID && repliedID === session.listMsgID) ||
+                      repliedBody.includes('اختر مجموعة');
+    if (!isOurList) return false;
 
-    const key = `${tid}:${uid}`;
-    const session = listSessions.get(key);
-    if (!session) return false;
-    if (Date.now() - session.at > SESSION_TTL) {
-        listSessions.delete(key);
-        return false;
+    if (!cfgIsDev(cfg, uid)) return false;
+
+    const text = normalizeDigits(event.body).trim();
+    if (!/^\d+$/.test(text)) return false;
+
+    if (event.messageID) {
+        if (seen.has(event.messageID)) return false;
+        seen.add(event.messageID);
+        if (seen.size > 200) seen.delete(seen.values().next().value);
     }
-    if (String(event.messageReply.messageID) !== session.messageID) return false;
 
-    const text = String(event.body || '').trim();
-    const num = parseInt(text, 10);
-    if (!num || num < 1 || num > session.groups.length) return false;
+    const r = await selectGroup(api, session, parseInt(text, 10));
+    api.sendMessage(r.msg, event.threadID);
+    return true;
+}
 
-    const selected = session.groups[num - 1];
-
-    const state = readAll();
-    state[uid] = { threadID: selected.threadID, name: selected.name, at: Date.now() };
-    writeAll(state);
-
-    listSessions.delete(key);
-
-    return api.sendMessage(
-`${HEADER}
-${LINE}
-🎯 تم تحديد المجموعة
-${LINE}
-📁 ${selected.name}
-🆔 ${selected.threadID}
-
-💡 الآن اكتب:
-   ${cfg.getPrefix()}تحكم <أمر> ← لتنفيذه فيها
-   ${cfg.getPrefix()}تحكم خروج ← لإلغاء التحكم
-${LINE}`,
-        tid,
-        () => {},
-        event.messageID
-    );
-};
+module.exports.onMessage = onReply;
+module.exports.onEvent = onReply;
