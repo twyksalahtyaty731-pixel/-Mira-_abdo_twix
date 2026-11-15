@@ -2,8 +2,13 @@
  * .صفع [@شخص | رد على رسالة | أيدي]
  * يرسل صورة فيها صاحب الأمر يصفع الشخص المقصود: بروفايل الأول فوق وجه الضارب
  * وبروفايل الثاني فوق وجه المصفوع، داخل صورة قالب تضعها أنت في assets/slap/ (jpg أو png).
+ *
+ * 🆕 جلب تلقائي: إن لم يوجد قالب في assets/slap (أو كتبت .صفع انمي) يجلب البوت بنفسه
+ * صورة متحركة (GIF) لصفعة أنمي عشوائية من الإنترنت ويرسلها مع منشن الشخصين.
+ * (الصورة المجلوبة جاهزة، فلا تُركَّب عليها صور الحسابات، لأن وجوهها تختلف في كل مرة.)
+ *
  * بدون هدف في المجموعة: يختار البوت ضحية عشوائية من الأعضاء (مثل زوجني).
- * بدون قالب في assets/slap: يرسم البوت صورة بديلة بالكود.
+ * الترتيب: قالبك ← صفعة أنمي مجلوبة ← صورة بديلة يرسمها البوت بالكود.
  *
  * أوامر المطور (لضبط مواضع الوجوه على القالب):
  *   .صفع شبكة                          يرسل القالب عليه شبكة أرقام (1–9 = أعشار العرض والارتفاع)
@@ -19,11 +24,14 @@ const { makeSlapCard, makeSlapFallback, makeGrid } = require('../../utils/slapIm
 module.exports.config = {
     name: 'صفع', aliases: ['slap', 'كف', 'اصفعه'],
     description: 'صفع الشخص المقصود بصورة (منشن أو رد، وإلا ضحية عشوائية)',
-    usage: 'صفع [@شخص | رد | أيدي]', category: 'games', cooldown: 20, adminOnly: false
+    usage: 'صفع [انمي] [@شخص | رد | أيدي]', category: 'games', cooldown: 20, adminOnly: false
 };
 
 const ASSETS = path.join(__dirname, '..', '..', 'assets', 'slap');
 const SAVED = path.join(__dirname, '..', '..', 'Heba_DB', 'slap_layout.json');
+
+// true = يفضّل الصفعة المجلوبة من الإنترنت دائماً حتى لو وُجد قالب محلي
+const PREFER_ONLINE = false;
 
 // تخمين أولي لوضع الوجوه (الضارب يمين، المصفوع يسار). اضبطه بـ .صفع شبكة ثم .صفع ضبط
 const DEFAULT_LAYOUT = { slapper: { x: 0.70, y: 0.30, r: 0.10 }, target: { x: 0.30, y: 0.30, r: 0.10 } };
@@ -33,12 +41,46 @@ const call = (api, method, ...args) => new Promise(resolve => {
     catch (e) { resolve(null); }
 });
 
+async function fetchBuffer(url, max = 8 * 1024 * 1024) {
+    const res = await axios.get(url, {
+        responseType: 'arraybuffer', timeout: 12000, maxContentLength: max,
+        headers: { 'User-Agent': 'Mozilla/5.0' }
+    });
+    return Buffer.from(res.data);
+}
+
 async function fetchAvatar(url) {
     if (!url) return null;
-    try {
-        const res = await axios.get(url, { responseType: 'arraybuffer', timeout: 8000, maxContentLength: 5 * 1024 * 1024 });
-        return Buffer.from(res.data);
-    } catch (e) { return null; }
+    try { return await fetchBuffer(url, 5 * 1024 * 1024); } catch (e) { return null; }
+}
+
+/* ─────────── جلب صفعة أنمي جاهزة من الإنترنت ─────────── */
+const ONLINE_SOURCES = [
+    // nekos.best: يعيد رابط GIF واسم الأنمي
+    async () => {
+        const r = await axios.get('https://nekos.best/api/v2/slap', { timeout: 8000 });
+        const x = r.data && r.data.results && r.data.results[0];
+        return x && x.url ? { url: x.url, anime: x.anime_name } : null;
+    },
+    // waifu.pics: مصدر احتياطي
+    async () => {
+        const r = await axios.get('https://api.waifu.pics/sfw/slap', { timeout: 8000 });
+        return r.data && r.data.url ? { url: r.data.url } : null;
+    }
+];
+
+async function fetchAnimeSlap() {
+    for (const source of ONLINE_SOURCES) {
+        try {
+            const item = await source();
+            if (!item) continue;
+            const buf = await fetchBuffer(item.url);
+            if (!buf || buf.length < 1000) continue;
+            const m = String(item.url).match(/\.(gif|png|jpe?g|webp)(\?|$)/i);
+            return { buf, ext: m ? m[1].toLowerCase() : 'gif', anime: item.anime || null };
+        } catch (e) { /* جرّب المصدر التالي */ }
+    }
+    return null;
 }
 
 /* ─────────── القوالب والمواضع ─────────── */
@@ -116,7 +158,8 @@ async function adminSub(sub, args, { api, event, helpers, deco }) {
 }
 
 module.exports.run = async ctx => {
-    const { api, event, args, helpers, deco, cfg } = ctx;
+    const { api, event, helpers, deco, cfg } = ctx;
+    let args = ctx.args || [];
     const reply = t => helpers.reply(api, event, t);
     const sender = String(event.senderID);
     const botId = String(api.getCurrentUserID());
@@ -124,6 +167,13 @@ module.exports.run = async ctx => {
     if (args[0] && cfg.isAdmin(sender)) {
         const done = await adminSub(args[0], args.slice(1), ctx);
         if (done !== null) return done;
+    }
+
+    // .صفع انمي ... ← فرض الصفعة المجلوبة من الإنترنت
+    let forceOnline = false;
+    if (args[0] === 'انمي' || args[0] === 'anime') {
+        forceOnline = true;
+        args = args.slice(1);
     }
 
     let target = helpers.getTarget(event, args);
@@ -142,17 +192,35 @@ module.exports.run = async ctx => {
     const info = (await call(api, 'getUserInfo', [sender, target])) || {};
     const nameOf = id => (info[id] && info[id].name) || `مستخدم ${id.slice(-4)}`;
     const thumbOf = id => { const u = info[id] || {}; return u.thumbSrc || u.avatar || u.profilePicture || null; };
-    const [imgA, imgB] = await Promise.all([fetchAvatar(thumbOf(sender)), fetchAvatar(thumbOf(target))]);
 
-    let out = null, ext = 'jpg';
-    try { // القالب أولًا
-        const files = templates();
-        if (files.length) {
+    const files = templates();
+    const useOnlineFirst = forceOnline || PREFER_ONLINE || !files.length;
+
+    let out = null, ext = 'jpg', animeName = null;
+
+    // 1) صفعة أنمي مجلوبة (إن كانت مفضّلة أو لا يوجد قالب)
+    const tryOnline = async () => {
+        const got = await fetchAnimeSlap();
+        if (got) { out = got.buf; ext = got.ext; animeName = got.anime; }
+    };
+    if (useOnlineFirst) await tryOnline();
+
+    // 2) قالبك مع صور الحسابين
+    if (!out && files.length) {
+        const [imgA, imgB] = await Promise.all([fetchAvatar(thumbOf(sender)), fetchAvatar(thumbOf(target))]);
+        try {
             const file = files[Math.floor(Math.random() * files.length)];
             out = makeSlapCard(fs.readFileSync(path.join(ASSETS, file)), imgA, imgB, layoutFor(file), sender, target);
+            ext = 'jpg';
+        } catch (e) { out = null; }
+
+        // 3) البديل المرسوم بالكود
+        if (!out) {
+            try { out = makeSlapFallback(imgA, imgB, sender, target); ext = 'png'; } catch (e) { out = null; }
         }
-    } catch (e) { out = null; }
-    if (!out) { // البديل المرسوم
+    } else if (!out) {
+        // لا قالب والجلب فشل: البديل المرسوم
+        const [imgA, imgB] = await Promise.all([fetchAvatar(thumbOf(sender)), fetchAvatar(thumbOf(target))]);
         try { out = makeSlapFallback(imgA, imgB, sender, target); ext = 'png'; } catch (e) { out = null; }
     }
 
@@ -160,7 +228,8 @@ module.exports.run = async ctx => {
     const power = 40 + Math.floor(Math.random() * 61);
     const body = `👋 صفعة!\n@${a} 👋 @${b}\n`
         + (random ? '🎲 اختار لك البوت ضحية عشوائية\n' : '')
-        + `💢 قوة الصفعة: ${power}%\n${LINES[Math.floor(Math.random() * LINES.length)]}`;
+        + `💢 قوة الصفعة: ${power}%\n${LINES[Math.floor(Math.random() * LINES.length)]}`
+        + (animeName ? `\n🎬 ${animeName}` : '');
     const mentions = [{ tag: `@${a}`, id: sender }, { tag: `@${b}`, id: target }];
     if (!out) return reply({ body, mentions });
 
