@@ -20,12 +20,13 @@ module.exports.config = {
 const TEMPLATE_URL = 'https://i.ibb.co/kZsMr4r/6bc5547007e36898e53cc49d536edc9c.jpg';
 
 // ═══════════════════════════════════════════════
-// 📐 إحداثيات وضع الصور (نسبة من عرض/ارتفاع الصورة)
-// يمكنك تعديل الأرقام لتطابق رؤوس الشخصيات بالضبط
+// 📐 إحداثيات وضع الصور
+// slapper = الشخص الذي أرسل الأمر (الصافع)
+// slapped = الشخص الذي تم الرد عليه (المصفوع)
 // ═══════════════════════════════════════════════
 const COORDS = {
-    slapper: { xPct: 0.70, yPct: 0.30, rPct: 0.12 }, // الصافع (الشخص الذي أرسل الأمر) - اليمين
-    slapped: { xPct: 0.30, yPct: 0.30, rPct: 0.12 }  // المصفوع (الشخص الذي تم الرد عليه) - اليسار
+    slapper: { xPct: 0.70, yPct: 0.30, rPct: 0.12 }, // تعديل مكان الصافع (اليمين)
+    slapped: { xPct: 0.30, yPct: 0.30, rPct: 0.12 }  // تعديل مكان المصفوع (اليسار)
 };
 
 const call = (api, method, ...args) => new Promise(resolve => {
@@ -67,15 +68,17 @@ module.exports.run = async ({ api, event, args, helpers }) => {
     const sender = String(event.senderID);
     const botId = String(api.getCurrentUserID());
 
-    // 1. تحديد الشخص المصفوع
+    // 1. تحديد الشخص المصفوع (الشخص الذي تم الرد عليه أو المنشن)
     let target = helpers.getTarget(event, args);
+    
     if (!target) {
         return reply("⚠️ يرجى الرد على رسالة الشخص الذي تريد صفعه، أو عمل منشن له.");
     }
+    
     if (target === sender) return reply("❌ لا يمكنك صفع نفسك!");
     if (target === botId) return reply("🛡️ البوت لا يُصفع!");
 
-    // 2. جلب الأسماء والصور
+    // 2. جلب الأسماء
     const info = (await call(api, 'getUserInfo', [sender, target])) || {};
     const nameOf = id => (info[id] && info[id].name) || `مستخدم ${id.slice(-4)}`;
     const thumbOf = id => { const u = info[id] || {}; return u.thumbSrc || u.avatar || u.profilePicture || null; };
@@ -85,10 +88,10 @@ module.exports.run = async ({ api, event, args, helpers }) => {
     const mentions = [{ tag: `@${a}`, id: sender }, { tag: `@${b}`, id: target }];
 
     try {
-        // 3. تحميل الصور
+        // 3. تحميل الصور (sender للصافع، target للمصفوع)
         const [imgA, imgB, templateBuf] = await Promise.all([
-            fetchAvatar(thumbOf(sender)),
-            fetchAvatar(thumbOf(target)),
+            fetchAvatar(thumbOf(sender)), // صورة الصافع
+            fetchAvatar(thumbOf(target)), // صورة المصفوع
             fetchAvatar(TEMPLATE_URL)
         ]);
 
@@ -101,19 +104,22 @@ module.exports.run = async ({ api, event, args, helpers }) => {
 
         ctx.drawImage(templateImg, 0, 0);
 
+        // إحداثيات الصافع (الذي أرسل الأمر)
         const sX = templateImg.width * COORDS.slapper.xPct;
         const sY = templateImg.height * COORDS.slapper.yPct;
         const sR = templateImg.width * COORDS.slapper.rPct;
 
+        // إحداثيات المصفوع (الذي تم الرد عليه)
         const tX = templateImg.width * COORDS.slapped.xPct;
         const tY = templateImg.height * COORDS.slapped.yPct;
         const tR = templateImg.width * COORDS.slapped.rPct;
 
-        const avatarA = imgA ? await loadImage(imgA) : null;
-        const avatarB = imgB ? await loadImage(imgB) : null;
+        const avatarSender = imgA ? await loadImage(imgA) : null;
+        const avatarTarget = imgB ? await loadImage(imgB) : null;
 
-        drawCircleImage(ctx, avatarA, sX, sY, sR);
-        drawCircleImage(ctx, avatarB, tX, tY, tR);
+        // رسم الصور
+        drawCircleImage(ctx, avatarSender, sX, sY, sR);
+        drawCircleImage(ctx, avatarTarget, tX, tY, tR);
 
         // 5. حفظ وإرسال
         const file = path.join(os.tmpdir(), `slap_${Date.now()}.png`);
@@ -124,7 +130,6 @@ module.exports.run = async ({ api, event, args, helpers }) => {
 
     } catch (error) {
         console.error('[صفع] خطأ في الرسم:', error.message);
-        // إرسال نص فقط إذا فشلت الصورة
         return reply({ body, mentions });
     }
 };
