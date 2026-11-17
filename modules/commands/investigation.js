@@ -1,326 +1,399 @@
 
-const axios = require('axios');
+const axios = require("axios");
 
 module.exports.config = {
-    name: 'فطفط',
-    aliases: ['investigate', 'report', 'بلاغ'],
-    description: 'فحص معلومات حساب فيسبوك وإنشاء تقرير مراجعة',
-    usage: 'فطفط',
-    category: 'admin',
+    name: "فطفط",
+    aliases: ["investigate", "report", "بلاغ"],
+    description: "فحص المعلومات العامة وإنشاء تقرير مراجعة لفيسبوك",
+    usage: "فطفط فحص الرابط <الرابط>",
+    category: "admin",
     cooldown: 10,
     adminOnly: false
 };
 
-function clean(value = '') {
-    return String(value)
-        .replace(/&amp;/g, '&')
+// تنظيف النص
+function clean(text = "") {
+    return String(text)
+        .replace(/&amp;/g, "&")
         .replace(/&quot;/g, '"')
         .replace(/&#39;/g, "'")
-        .replace(/&lt;/g, '<')
-        .replace(/&gt;/g, '>')
+        .replace(/&lt;/g, "<")
+        .replace(/&gt;/g, ">")
         .replace(/&#(\d+);/g, (_, n) =>
-            String.fromCodePoint(Number(n))
+            String.fromCharCode(Number(n))
         )
-        .replace(/&nbsp;/g, ' ')
         .trim();
 }
 
-function getMeta(html, key) {
-    const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+// استخراج العملية من أي مكان في الأمر
+function getMode(args) {
+    const modes = {
+        "فحص": "inspect",
+        "check": "inspect",
+        "inspect": "inspect",
+        "تقرير": "report",
+        "report": "report",
+        "بلاغ": "report"
+    };
 
-    const patterns = [
-        new RegExp(
-            `<meta[^>]+(?:property|name)=["']${escaped}["'][^>]+content=["']([^"']*)["'][^>]*>`,
-            'i'
-        ),
-        new RegExp(
-            `<meta[^>]+content=["']([^"']*)["'][^>]+(?:property|name)=["']${escaped}["'][^>]*>`,
-            'i'
-        )
-    ];
+    return args
+        .map(x => modes[String(x).toLowerCase().trim()])
+        .find(Boolean);
+}
 
-    for (const pattern of patterns) {
-        const match = html.match(pattern);
-        if (match) return clean(match[1]);
+// استخراج رابط فيسبوك من أي مكان في الرسالة
+function getFacebookUrl(args) {
+    const text = args.join(" ");
+
+    const matches = text.match(
+        /(?:https?:\/\/)?(?:www\.|m\.)?(?:facebook\.com|fb\.com)\/[^\s<>"']+/gi
+    );
+
+    if (!matches) return null;
+
+    for (let raw of matches) {
+        raw = raw.replace(/[),.!؟]+$/g, "");
+
+        if (!/^https?:\/\//i.test(raw)) {
+            raw = "https://" + raw;
+        }
+
+        try {
+            const parsed = new URL(raw);
+            const host = parsed.hostname.toLowerCase();
+
+            if (
+                host === "facebook.com" ||
+                host.endsWith(".facebook.com") ||
+                host === "fb.com" ||
+                host.endsWith(".fb.com")
+            ) {
+                return parsed.href;
+            }
+        } catch (_) {}
     }
 
-    return '';
+    return null;
 }
 
-function stylizedName(name) {
-    if (!name) return false;
-
-    const unusual = (name.match(/[^\p{L}\p{N}\s]/gu) || []).length;
-    const total = Math.max(name.length, 1);
-
-    return unusual >= 3 || unusual / total > 0.25;
-}
-
-async function inspectAccount(url) {
+// قراءة معلومات الصفحة العامة
+async function getMeta(url) {
     const response = await axios.get(url, {
         timeout: 15000,
         maxRedirects: 5,
-        responseType: 'text',
         headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36',
-            'Accept-Language': 'en-US,en;q=0.9'
+            "User-Agent":
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
+            "Accept-Language": "ar,en-US;q=0.9,en;q=0.8"
         }
     });
 
-    const html = response.data || '';
+    const html = response.data || "";
 
-    const title =
-        getMeta(html, 'og:title') ||
-        getMeta(html, 'twitter:title') ||
-        '';
+    function getTagValue(key) {
+        const tags = html.match(/<meta\b[^>]*>/gi) || [];
 
-    const description =
-        getMeta(html, 'og:description') ||
-        getMeta(html, 'description') ||
-        '';
+        for (const tag of tags) {
+            const property =
+                tag.match(/\b(?:property|name)\s*=\s*["']([^"']+)["']/i);
 
-    const image =
-        getMeta(html, 'og:image') ||
-        getMeta(html, 'twitter:image') ||
-        '';
+            if (!property || property[1].toLowerCase() !== key.toLowerCase()) {
+                continue;
+            }
 
-    const canonical =
-        getMeta(html, 'og:url') ||
-        url;
+            const content =
+                tag.match(/\bcontent\s*=\s*["']([^"']*)["']/i);
 
-    let name = title
-        .replace(/\s*\|\s*Facebook.*$/i, '')
-        .replace(/\s*-\s*Facebook.*$/i, '')
-        .trim();
+            if (content) return clean(content[1]);
+        }
+
+        return null;
+    }
 
     return {
-        name: name || 'لم يتم العثور على الاسم',
-        description: description || 'لا توجد نبذة عامة متاحة',
-        image: image || 'لا توجد صورة عامة متاحة',
-        canonical,
-        status: response.status
+        title:
+            getTagValue("og:title") ||
+            getTagValue("twitter:title") ||
+            null,
+
+        description:
+            getTagValue("og:description") ||
+            getTagValue("description") ||
+            null,
+
+        image:
+            getTagValue("og:image") ||
+            getTagValue("twitter:image") ||
+            null,
+
+        pageUrl:
+            getTagValue("og:url") ||
+            url
     };
 }
 
-function buildInspection(data, url) {
-    const findings = [];
+// فحص الاسم بشكل مبدئي
+function checkName(name) {
+    if (!name) {
+        return "لم يتم العثور على اسم عام يمكن فحصه.";
+    }
 
-    if (data.name === 'لم يتم العثور على الاسم') {
-        findings.push(
-            'تعذر استخراج الاسم الظاهر من الصفحة العامة. لا يمكن اعتبار ذلك دليلاً على مخالفة.'
-        );
-    } else if (stylizedName(data.name)) {
-        findings.push(
-            'الاسم الظاهر يحتوي على زخارف أو رموز غير معتادة. هذه ملاحظة شكلية فقط، ولا تثبت أن الاسم مزيف أو مخالف.'
-        );
-    } else {
-        findings.push(
-            'لم تظهر في الاسم المستخرج مؤشرات شكلية واضحة على كثرة الزخارف.'
+    const unusual = /[★☆♡♥♛♕♜♞♟✦✧❖꧁꧂『』【】]/.test(name);
+
+    if (unusual) {
+        return (
+            "يحتوي الاسم على رموز وزخارف. " +
+            "هذا مجرد ملاحظة شكلية، ولا يعني وحده أن الاسم مخالف."
         );
     }
 
-    if (data.description === 'لا توجد نبذة عامة متاحة') {
-        findings.push(
-            'لم تتوفر نبذة عامة يمكن فحصها.'
-        );
-    } else {
-        findings.push(
-            'تم استخراج نبذة عامة. يلزم مراجعة مضمونها ومقارنته بالمعلومات الموثوقة قبل الحكم على صحتها.'
-        );
-    }
-
-    if (data.image === 'لا توجد صورة عامة متاحة') {
-        findings.push(
-            'تعذر الوصول إلى رابط الصورة العامة، لذلك لم يتم فحص محتواها.'
-        );
-    } else {
-        findings.push(
-            'تم العثور على رابط صورة عامة. لم يتم تحليل الصورة بصرياً، ولا يمكن وصفها بأنها مسيئة دون مراجعتها.'
-        );
-    }
-
-    return `
-🔎 نتيجة فحص الحساب
-
-الرابط:
-${url}
-
-الاسم الظاهر:
-${data.name}
-
-النبذة:
-${data.description}
-
-رابط الصورة:
-${data.image}
-
-ملاحظات الفحص:
-${findings.map((x, i) => `${i + 1}. ${x}`).join('\n\n')}
-
-حالة الوصول:
-${data.status === 200 ? 'تم الوصول إلى صفحة عامة' : 'استجابة الموقع: ' + data.status}
-
-حدود الفحص:
-هذا الفحص يعتمد على المعلومات العامة التي أعادتها صفحة فيسبوك. لا يستطيع تأكيد الهوية الحقيقية أو كشف المعلومات الخاصة أو إثبات أن الصور والمنشورات مخالفة. وقد تمنع إعدادات الخصوصية أو تسجيل الدخول الوصول إلى بعض البيانات.
-`;
+    return "لم تظهر زخارف واضحة في الاسم المستخرج.";
 }
 
-function buildReport(data, url) {
-    const reportTitles = [
-        'FORMAL REQUEST FOR ACCOUNT SAFETY REVIEW',
-        'COMMUNITY STANDARDS INVESTIGATION REQUEST',
-        'OFFICIAL CONTENT REVIEW COMPLAINT',
-        'TRUST AND SAFETY REVIEW SUBMISSION'
-    ];
+// إنشاء نتيجة الفحص
+function buildInspection(meta, url) {
+    const lines = [];
 
-    const title = reportTitles[
-        Math.floor(Math.random() * reportTitles.length)
-    ];
+    lines.push("🔎 تقرير فحص المعلومات العامة");
+    lines.push("━━━━━━━━━━━━━━━━━━");
+    lines.push("🔗 الرابط: " + url);
+    lines.push("");
 
-    return `
-${title}
+    lines.push("👤 اسم الصفحة:");
+    lines.push(meta.title || "لم يتوفر اسم عام.");
+    lines.push("");
 
-TO: META PLATFORM TRUST AND SAFETY TEAM
+    lines.push("📝 الوصف:");
+    lines.push(meta.description || "لم يتوفر وصف عام.");
+    lines.push("");
 
-SUBJECT: Request for Review of a Facebook Account
+    lines.push("🖼️ صورة الصفحة:");
+    lines.push(
+        meta.image
+            ? "تم العثور على رابط صورة عامة للصفحة."
+            : "لم يتم العثور على رابط صورة عامة."
+    );
+    lines.push("");
 
-TARGET ACCOUNT:
-${url}
+    lines.push("📌 ملاحظات الاسم:");
+    lines.push(checkName(meta.title));
+    lines.push("");
 
-PUBLICLY OBSERVED INFORMATION
+    lines.push("⚠️ حدود الفحص:");
+    lines.push(
+        "• الفحص يعتمد على البيانات العامة التي أتاحها فيسبوك."
+    );
+    lines.push(
+        "• لم يتم التحقق من هوية صاحب الحساب."
+    );
+    lines.push(
+        "• لم يتم تحليل جميع الصور أو المنشورات أو التعليقات."
+    );
+    lines.push(
+        "• لا يمكن اعتبار هذه النتائج إثباتاً لوجود مخالفة."
+    );
 
-Displayed name:
-${data.name}
+    lines.push("━━━━━━━━━━━━━━━━━━");
+    lines.push("🌸 ميرا");
 
-Public description:
-${data.description}
-
-Public profile image:
-${data.image}
-
-PURPOSE OF THIS REPORT
-
-I respectfully request a review of the account identified above to determine whether its publicly accessible content complies with Meta's Community Standards.
-
-AREAS REQUESTED FOR REVIEW
-
-1. AUTHENTICITY AND ACCOUNT REPRESENTATION
-
-Please assess whether the displayed identity, account name, profile details, and other representations are misleading or impersonate another person or entity. Decorative characters or unusual spelling alone should not be treated as proof of a violation.
-
-2. PROFILE IMAGE AND VISUAL CONTENT
-
-Please review the profile image and other publicly accessible visual material for content that may violate policies concerning harassment, graphic material, prohibited nudity, sexual exploitation, or other restricted content.
-
-3. PROFILE INFORMATION AND POTENTIAL MISREPRESENTATION
-
-Please assess whether the public biography, description, and other account information contain demonstrably deceptive claims, impersonation, or misleading representations.
-
-4. HARASSMENT AND THREATS
-
-Please review publicly accessible posts and interactions for targeted harassment, bullying, credible threats, or intimidation, if present.
-
-5. DANGEROUS ORGANIZATIONS AND VIOLENT CONTENT
-
-If relevant material is present, please determine whether it promotes or supports prohibited violent organizations, terrorism, or acts of violence.
-
-6. SEXUAL CONTENT AND EXPLOITATION
-
-Please examine relevant public content for violations involving prohibited sexual material, exploitation, abuse, or other restricted content.
-
-REQUEST FOR ACTION
-
-I request an independent review of the account and its relevant publicly available material. If specific violations are confirmed, please apply the appropriate measures under the applicable Community Standards.
-
-The information listed above is limited to publicly accessible page metadata. This report does not claim that any unverified allegation has been established as fact.
-
-REFERENCE URL:
-${url}
-
-Respectfully,
-Community Safety Reporter
-
-END OF REPORT
-`;
+    return lines.join("\n");
 }
 
-module.exports.run = async ({ api, event, args, helpers, cfg }) => {
+// إنشاء تقرير مراجعة بصياغة متنوعة
+function buildReport(url) {
+    const openings = [
+        "Request for Review of a Facebook Account",
+        "Formal Account Review Request",
+        "Request for Safety and Policy Assessment",
+        "Facebook Profile Review Submission"
+    ];
+
+    const introductions = [
+        "I am submitting this request to ask the Facebook review team to assess the public profile linked below.",
+        "Please review the referenced Facebook profile and determine whether its publicly available content complies with the platform's policies.",
+        "This submission requests an independent assessment of the account and any relevant publicly accessible material."
+    ];
+
+    const endings = [
+        "Please take any action that is appropriate under the applicable platform policies, if a violation is confirmed.",
+        "I respectfully request that the review team assess the available evidence and determine whether further action is warranted.",
+        "Thank you for reviewing this concern. Any decision should be based on verified information and the applicable policies."
+    ];
+
+    const choose = arr =>
+        arr[Math.floor(Math.random() * arr.length)];
+
+    return [
+        choose(openings),
+        "",
+        "To: Facebook Content Review Team",
+        "",
+        "Subject: Request for Review",
+        "",
+        "Account URL:",
+        url,
+        "",
+        "1. Purpose of this request",
+        choose(introductions),
+        "",
+        "2. Areas that may require review",
+        "",
+        "• Account authenticity:",
+        "Please assess whether the account's name, identity claims, or profile information may involve impersonation or misleading representation.",
+        "",
+        "• Profile image and public information:",
+        "Please review whether the profile image and publicly displayed information comply with Facebook's applicable standards.",
+        "",
+        "• Harassment or threats:",
+        "If specific public posts or messages contain targeted harassment, intimidation, or credible threats, please assess them under the relevant policies.",
+        "",
+        "• Dangerous organizations or violent content:",
+        "If verifiable public material indicates promotion or support of violence or a prohibited organization, please assess that material under the relevant policies.",
+        "",
+        "• Inappropriate content:",
+        "Please review any reported content that may violate the platform's rules concerning nudity, sexual exploitation, or the safety of minors.",
+        "",
+        "3. Evidence and verification",
+        "The concerns listed above are review categories, not established findings. Specific posts, dates, screenshots, and direct links should be supplied where available. No allegation should be treated as confirmed without independent verification.",
+        "",
+        "4. Requested action",
+        choose(endings),
+        "",
+        "Please review only the relevant evidence and apply the appropriate platform policies.",
+        "",
+        "Respectfully,",
+        "A Facebook user",
+        "",
+        "End of submission"
+    ].join("\n");
+}
+
+// الرد على المستخدم
+async function send(api, event, helpers, message) {
+    return helpers.reply(api, event, message);
+}
+
+module.exports.run = async function ({
+    api,
+    event,
+    args = [],
+    helpers,
+    cfg
+}) {
     try {
-        if (!cfg.isAdmin(String(event.senderID))) {
-            return helpers.reply(
+        // التحقق من صلاحية المطور
+        if (
+            !cfg ||
+            typeof cfg.isAdmin !== "function" ||
+            !cfg.isAdmin(String(event.senderID))
+        ) {
+            return send(
                 api,
                 event,
-                'هذا الأمر مخصص للمطور فقط.'
+                helpers,
+                "⛔ هذا الأمر مخصص للمطور فقط."
             );
         }
 
-        const mode = (args[0] || '').toLowerCase();
+        // دعم اختلاف ترتيب الكلمات
+        const mode = getMode(args);
+        const url = getFacebookUrl(args);
 
         if (!mode) {
-            return helpers.reply(
+            return send(
                 api,
                 event,
-                `╭───「 فحص وبلاغ 」───╮
-
-اختر العملية التي تريدها:
-
-1️⃣ فحص الحساب
-اكتب:
-.فطفط فحص رابط_الحساب
-
-2️⃣ إنشاء تقرير رسمي
-اكتب:
-.فطفط تقرير رابط_الحساب
-
-╰────────────────╯`
+                helpers,
+                [
+                    "⚙️ اختر العملية المطلوبة:",
+                    "",
+                    "🔎 للفحص:",
+                    ".فطفط فحص الرابط https://www.facebook.com/profile.php?id=123",
+                    "",
+                    "📄 لإنشاء تقرير:",
+                    ".فطفط تقرير الرابط https://www.facebook.com/profile.php?id=123",
+                    "",
+                    "يمكنك وضع الرابط قبل العملية أو بعدها."
+                ].join("\n")
             );
         }
 
-        if (!['فحص', 'check', 'تقرير', 'report'].includes(mode)) {
-            return helpers.reply(
+        if (!url) {
+            return send(
                 api,
                 event,
-                '❌ الخيار غير صحيح.\nاكتب .فطفط لعرض الخيارات.'
+                helpers,
+                [
+                    "⚠️ لم أجد رابط فيسبوك في رسالتك.",
+                    "",
+                    "مثال:",
+                    ".فطفط فحص الرابط https://www.facebook.com/profile.php?id=123",
+                    "",
+                    "أو:",
+                    ".فطفط https://www.facebook.com/profile.php?id=123 فحص"
+                ].join("\n")
             );
         }
 
-        const url = args[1];
+        // إنشاء التقرير دون الحاجة إلى فتح الحساب
+        if (mode === "report") {
+            const report = buildReport(url);
 
-        if (!url || !/^https?:\/\/(www\.)?(facebook\.com|m\.facebook\.com)\//i.test(url)) {
-            return helpers.reply(
+            return send(
                 api,
                 event,
-                '⚠️ أرسل رابط حساب فيسبوك صحيحاً بعد اختيار العملية.'
+                helpers,
+                "📄 تم إنشاء مسودة التقرير:\n\n" + report +
+                "\n\n⚠️ هذه مسودة فقط. لم يتم إرسال بلاغ إلى فيسبوك."
             );
         }
 
-        api.setMessageReaction('🔎', event.messageID, () => {}, true);
-
-        const data = await inspectAccount(url);
-
-        if (['فحص', 'check'].includes(mode)) {
-            return helpers.reply(
-                api,
-                event,
-                buildInspection(data, url)
-            );
-        }
-
-        return helpers.reply(
+        // فحص البيانات العامة
+        await send(
             api,
             event,
-            buildReport(data, url)
+            helpers,
+            "🔎 جارٍ محاولة قراءة المعلومات العامة للحساب..."
         );
 
+        try {
+            const meta = await getMeta(url);
+            const result = buildInspection(meta, url);
+
+            return send(api, event, helpers, result);
+
+        } catch (error) {
+            console.error("[فطفط] Inspection error:", error.message);
+
+            return send(
+                api,
+                event,
+                helpers,
+                [
+                    "⚠️ تعذر الوصول إلى المعلومات العامة للحساب.",
+                    "",
+                    "قد يكون السبب:",
+                    "• فيسبوك طلب تسجيل الدخول.",
+                    "• الصفحة غير متاحة للعامة.",
+                    "• فيسبوك منع طلب البوت.",
+                    "• مشكلة مؤقتة في الاتصال.",
+                    "",
+                    "الرابط الذي حاولنا فحصه:",
+                    url,
+                    "",
+                    "ملاحظة: تعذر الوصول لا يعني أن الحساب مخالف."
+                ].join("\n")
+            );
+        }
+
     } catch (error) {
-        console.error('[فطفط] خطأ:', error.message);
+        console.error("[فطفط] Command error:", error);
 
-        api.setMessageReaction('❌', event.messageID, () => {}, true);
-
-        return helpers.reply(
+        return send(
             api,
             event,
-            '❌ تعذر فحص الصفحة. قد تكون خاصة أو تتطلب تسجيل الدخول أو تمنع الوصول الآلي.'
+            helpers,
+            "❌ حدث خطأ أثناء تنفيذ الأمر. راجع سجل تشغيل البوت."
         );
     }
 };
