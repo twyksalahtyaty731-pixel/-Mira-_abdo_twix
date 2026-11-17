@@ -27,7 +27,7 @@ const DEFAULT = {
     status: 'ACTIVE',
     bot: 'MIRA',
     cardNumber: '0000 4650',
-    facebookId: '',
+    facebookId: '61595522514650',
     avatar: ''
 };
 
@@ -51,7 +51,12 @@ function getDeveloper(cfg) {
         }
     }
 
-    return { ...DEFAULT, ...data };
+    return {
+        ...DEFAULT,
+        ...data,
+        facebookId: String(data.facebookId || DEFAULT.facebookId),
+        avatar: String(data.avatar || DEFAULT.avatar)
+    };
 }
 
 function rounded(ctx, x, y, w, h, r, fill, stroke, lineWidth = 1) {
@@ -135,58 +140,70 @@ function drawBarcode(ctx, x, y) {
 }
 
 async function getAvatar(api, dev) {
-    if (dev.avatar) {
-        try {
-            const response = await axios.get(dev.avatar, {
-                responseType: 'arraybuffer',
-                timeout: 10000
-            });
-            return await loadImage(Buffer.from(response.data));
-        } catch (_) {}
-    }
+    const id = String(dev.facebookId || DEFAULT.facebookId).replace(/\D/g, '');
+    const urls = [];
 
-    const id = String(dev.facebookId || '').replace(/\D/g, '');
+    if (dev.avatar) {
+        urls.push(dev.avatar);
+    }
 
     if (id && api.getUserInfo) {
         try {
-            const info = await new Promise(resolve => {
-                let done = false;
+            const thumb = await new Promise(resolve => {
+                let finished = false;
 
                 const timer = setTimeout(() => {
-                    if (!done) {
-                        done = true;
+                    if (!finished) {
+                        finished = true;
                         resolve(null);
                     }
-                }, 8000);
+                }, 10000);
 
                 api.getUserInfo([id], (err, data) => {
-                    if (done) return;
-                    done = true;
+                    if (finished) return;
+
+                    finished = true;
                     clearTimeout(timer);
 
-                    resolve(!err && data && data[id]
-                        ? data[id].thumbSrc
-                        : null);
+                    resolve(
+                        !err && data && data[id]
+                            ? data[id].thumbSrc
+                            : null
+                    );
                 });
             });
 
-            if (info) {
-                const response = await axios.get(info, {
-                    responseType: 'arraybuffer',
-                    timeout: 10000
-                });
-
-                return await loadImage(Buffer.from(response.data));
-            }
+            if (thumb) urls.push(thumb);
         } catch (_) {}
+    }
+
+    if (id) {
+        urls.push(
+            `https://graph.facebook.com/${id}/picture?type=large`
+        );
+    }
+
+    for (const url of urls) {
+        try {
+            const response = await axios.get(url, {
+                responseType: 'arraybuffer',
+                timeout: 15000,
+                maxRedirects: 5
+            });
+
+            return await loadImage(Buffer.from(response.data));
+        } catch (err) {
+            console.log('[المطور] تعذر تحميل صورة:', err.message);
+        }
     }
 
     return null;
 }
 
+// الصورة الدائرية مرفوعة للأعلى لمنع تداخلها مع البطاقات
 function drawAvatar(ctx, avatar, name) {
     const x = 125;
-    const y = 235;
+    const y = 185;
     const r = 92;
 
     ctx.save();
@@ -206,7 +223,11 @@ function drawAvatar(ctx, avatar, name) {
     ctx.clip();
 
     if (avatar) {
-        const scale = Math.max((r * 2) / avatar.width, (r * 2) / avatar.height);
+        const scale = Math.max(
+            (r * 2) / avatar.width,
+            (r * 2) / avatar.height
+        );
+
         const width = avatar.width * scale;
         const height = avatar.height * scale;
 
@@ -218,7 +239,10 @@ function drawAvatar(ctx, avatar, name) {
             height
         );
     } else {
-        const g = ctx.createLinearGradient(x - r, y - r, x + r, y + r);
+        const g = ctx.createLinearGradient(
+            x - r, y - r, x + r, y + r
+        );
+
         g.addColorStop(0, '#142c68');
         g.addColorStop(1, '#7b39c9');
 
@@ -233,15 +257,45 @@ function drawAvatar(ctx, avatar, name) {
     ctx.save();
     ctx.shadowColor = '#a64cff';
     ctx.shadowBlur = 15;
+
     ctx.beginPath();
     ctx.arc(x, y, r + 5, 0, Math.PI * 2);
     ctx.strokeStyle = '#83dfff';
     ctx.lineWidth = 5;
     ctx.stroke();
+
     ctx.restore();
 
-    pill(ctx, 145, 293, 62, 'LV.', '#783ce8', '#b34dff');
-    pill(ctx, 145, 330, 62, 'MAX', '#783ce8', '#b34dff');
+    // شارة المستوى بجانب الصورة
+    const bx = 195;
+    const by = 250;
+
+    ctx.save();
+    ctx.shadowColor = '#a64cff';
+    ctx.shadowBlur = 15;
+
+    const badge = ctx.createLinearGradient(
+        bx - 28, by - 28, bx + 28, by + 28
+    );
+
+    badge.addColorStop(0, '#783ce8');
+    badge.addColorStop(1, '#b34dff');
+
+    ctx.beginPath();
+    ctx.arc(bx, by, 28, 0, Math.PI * 2);
+    ctx.fillStyle = badge;
+    ctx.fill();
+
+    ctx.strokeStyle = '#d9b5ff';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    ctx.shadowBlur = 0;
+
+    text(ctx, 'LVL', bx, by - 7, 10, '#fff', 'bold', 'center');
+    text(ctx, 'MAX', bx, by + 9, 12, '#fff', 'bold', 'center');
+
+    ctx.restore();
 }
 
 function drawCard(dev, avatar) {
@@ -273,7 +327,6 @@ function drawCard(dev, avatar) {
     rounded(ctx, 7, 7, 986, 476, 17, null, '#688aff', 3);
     rounded(ctx, 17, 17, 966, 456, 12, null, 'rgba(110,180,255,.55)', 1);
 
-    // الزوايا المضيئة
     ctx.strokeStyle = '#6bd9ff';
     ctx.lineWidth = 4;
 
@@ -296,7 +349,7 @@ function drawCard(dev, avatar) {
     ctx.stroke();
 
     text(ctx, 'M I R A', 48, 48, 16, '#d8ecff');
-    text(ctx, 'D E V E L O P E R  C A R D', 48, 67, 10, '#9bb9e9', 'bold');
+    text(ctx, 'D E V E L O P E R  C A R D', 48, 67, 10, '#9bb9e9');
 
     pill(ctx, 290, 23, 142, 'DEVELOPER', '#f3c400', '#ff9f00');
     pill(ctx, 445, 23, 112, 'LV. MAX', '#7936d7', '#b34bff');
@@ -311,9 +364,8 @@ function drawCard(dev, avatar) {
     drawAvatar(ctx, avatar, dev.name);
 
     text(ctx, String(dev.name).toUpperCase(), 290, 119, 54, '#fff');
-    text(ctx, '" MIRA BOT DEVELOPER "', 292, 157, 17, '#c9d9ff', 'bold');
+    text(ctx, '" MIRA BOT DEVELOPER "', 292, 157, 17, '#c9d9ff');
 
-    // خط الفاصل
     ctx.strokeStyle = 'rgba(105,160,255,.65)';
     ctx.lineWidth = 1;
     ctx.beginPath();
@@ -378,7 +430,17 @@ function drawCard(dev, avatar) {
     text(ctx, String(dev.cardNumber), 42, 466, 10, '#a9c4ed');
 
     pill(ctx, 360, 420, 280, 'DEVELOPER CARD', '#3979d9', '#6b4de4');
-    text(ctx, `MIRA DEVELOPER CARD • ${new Date().toISOString().slice(0, 10)}`, 500, 462, 11, '#b4c8ed', 'bold', 'center');
+
+    text(
+        ctx,
+        `MIRA DEVELOPER CARD • ${new Date().toISOString().slice(0, 10)}`,
+        500,
+        462,
+        11,
+        '#b4c8ed',
+        'bold',
+        'center'
+    );
 
     ctx.beginPath();
     ctx.arc(820, 447, 5, 0, Math.PI * 2);
@@ -421,6 +483,7 @@ function sendCard(api, event, file) {
                 event.threadID,
                 err => {
                     if (finished) return;
+
                     finished = true;
                     clearTimeout(timer);
 
@@ -444,7 +507,6 @@ module.exports.run = async ({ api, event, cfg }) => {
 
     try {
         const dev = getDeveloper(cfg);
-
         const avatar = await getAvatar(api, dev);
         const canvas = drawCard(dev, avatar);
 
