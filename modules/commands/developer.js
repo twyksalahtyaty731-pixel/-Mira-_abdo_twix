@@ -1,269 +1,479 @@
-/**
- * 👑 .المطور — يولّد بطاقة PNG للمطور بصورة حسابه
- */
-const fs = require('fs-extra');
-const path = require('path');
+
+const fs = require('fs');
 const os = require('os');
+const path = require('path');
 const axios = require('axios');
-const { createCanvas, loadImage, GlobalFonts } = require('@napi-rs/canvas');
+const { createCanvas, loadImage } = require('@napi-rs/canvas');
 
 module.exports.config = {
     name: 'المطور',
-    aliases: ['dev', 'مطوري'],
-    description: 'بطاقة المطور مع صورة حسابه',
+    aliases: ['مطور', 'dev', 'owner'],
+    description: 'إرسال بطاقة المطور',
     usage: 'المطور',
-    category: 'system',
+    category: 'tools',
     cooldown: 5,
     adminOnly: false
 };
 
-// ═══════════════════════════════════════════════
-// 👑 بيانات المطور
-// ═══════════════════════════════════════════════
-const DEV = {
+const W = 1000;
+const H = 490;
+
+const DEFAULT = {
     name: 'TWIX',
-    country: 'السودان',
-    age: 20,
-    facebookId: '61595522514650'
+    country: 'SUDAN',
+    age: '—',
+    role: 'OWNER',
+    level: 'MAX',
+    status: 'ACTIVE',
+    bot: 'MIRA',
+    cardNumber: '0000 4650',
+    facebookId: '',
+    avatar: ''
 };
 
-const W = 850, H = 460;
+function getDeveloper(cfg) {
+    let data = cfg && cfg.DEVELOPER ? cfg.DEVELOPER : {};
 
-// ═══════════════════════════════════════════════
-// 🔤 تسجيل الخطوط (يدعم العربية إذا وُجد خط عربي)
-// ═══════════════════════════════════════════════
-function registerFonts() {
-    const candidates = [
-        path.join(__dirname, '..', '..', 'assets', 'font.ttf'),
-        path.join(__dirname, '..', '..', 'assets', 'arabic.ttf'),
-        '/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf',
-        '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
-        '/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf'
-    ];
-    let registered = 'sans-serif';
-    for (const p of candidates) {
-        try {
-            if (fs.existsSync(p)) {
-                GlobalFonts.registerFromPath(p, 'CardFont');
-                registered = 'CardFont';
-                console.log('[المطور] ✅ تم تسجيل الخط:', p);
-                break;
-            }
-        } catch (e) {}
-    }
-    if (registered === 'sans-serif') {
-        console.log('[المطور] ⚠️ لم يتم العثور على خط مخصص. سيُستخدم الخط الافتراضي (قد لا يدعم العربية).');
-    }
-    return registered;
-}
+    if (!Object.keys(data).length) {
+        const locations = [
+            path.join(__dirname, '..', '..', 'config.json'),
+            path.join(process.cwd(), 'config.json')
+        ];
 
-const FONT = registerFonts();
-
-// ═══════════════════════════════════════════════
-// 🖼️ تحميل الصورة مع تجربة عدة روابط
-// ═══════════════════════════════════════════════
-async function downloadAvatar(id) {
-    const urls = [
-        `https://graph.facebook.com/${id}/picture?width=720&height=720&type=large`,
-        `https://graph.facebook.com/${id}/picture?width=720&height=720`
-    ];
-    for (const url of urls) {
-        try {
-            const res = await axios.get(url, {
-                responseType: 'arraybuffer',
-                timeout: 15000,
-                maxRedirects: 5,
-                headers: { 'User-Agent': 'Mozilla/5.0' },
-                validateStatus: (s) => s >= 200 && s < 400
-            });
-            if (res.data && res.data.byteLength > 2000) {
-                return Buffer.from(res.data);
-            }
-        } catch (e) {
-            console.log('[المطور] فشل تحميل الصورة:', e.message);
+        for (const location of locations) {
+            try {
+                const file = JSON.parse(fs.readFileSync(location, 'utf8'));
+                if (file.DEVELOPER) {
+                    data = file.DEVELOPER;
+                    break;
+                }
+            } catch (_) {}
         }
     }
+
+    return { ...DEFAULT, ...data };
+}
+
+function rounded(ctx, x, y, w, h, r, fill, stroke, lineWidth = 1) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+
+    if (fill) {
+        ctx.fillStyle = fill;
+        ctx.fill();
+    }
+
+    if (stroke) {
+        ctx.strokeStyle = stroke;
+        ctx.lineWidth = lineWidth;
+        ctx.stroke();
+    }
+}
+
+function text(ctx, value, x, y, size, color = '#fff', weight = 'bold', align = 'left') {
+    ctx.font = `${weight} ${size}px Arial`;
+    ctx.fillStyle = color;
+    ctx.textAlign = align;
+    ctx.textBaseline = 'middle';
+    ctx.fillText(String(value), x, y);
+}
+
+function pill(ctx, x, y, w, label, color1, color2) {
+    const g = ctx.createLinearGradient(x, y, x + w, y);
+    g.addColorStop(0, color1);
+    g.addColorStop(1, color2);
+
+    rounded(ctx, x, y, w, 40, 20, g, 'rgba(255,255,255,.45)', 1);
+    text(ctx, label, x + w / 2, y + 21, 14, '#fff', 'bold', 'center');
+}
+
+function drawFlag(ctx, x, y) {
+    rounded(ctx, x, y, 38, 25, 4, '#fff');
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(x, y, 38, 25);
+    ctx.clip();
+
+    ctx.fillStyle = '#D21034';
+    ctx.fillRect(x, y, 38, 8.4);
+
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(x, y + 8.3, 38, 8.4);
+
+    ctx.fillStyle = '#111';
+    ctx.fillRect(x, y + 16.6, 38, 8.4);
+
+    ctx.fillStyle = '#078930';
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(x + 17, y + 12.5);
+    ctx.lineTo(x, y + 25);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.restore();
+}
+
+function drawBarcode(ctx, x, y) {
+    let seed = 24681357;
+
+    for (let i = 0; i < 95; i++) {
+        seed = (seed * 16807) % 2147483647;
+        const width = seed % 3 === 0 ? 3 : 1;
+        const height = 30 + (seed % 5);
+
+        ctx.fillStyle = '#b8dfff';
+        ctx.fillRect(x, y + (35 - height), width, height);
+        x += width + 1;
+    }
+}
+
+async function getAvatar(api, dev) {
+    if (dev.avatar) {
+        try {
+            const response = await axios.get(dev.avatar, {
+                responseType: 'arraybuffer',
+                timeout: 10000
+            });
+            return await loadImage(Buffer.from(response.data));
+        } catch (_) {}
+    }
+
+    const id = String(dev.facebookId || '').replace(/\D/g, '');
+
+    if (id && api.getUserInfo) {
+        try {
+            const info = await new Promise(resolve => {
+                let done = false;
+
+                const timer = setTimeout(() => {
+                    if (!done) {
+                        done = true;
+                        resolve(null);
+                    }
+                }, 8000);
+
+                api.getUserInfo([id], (err, data) => {
+                    if (done) return;
+                    done = true;
+                    clearTimeout(timer);
+
+                    resolve(!err && data && data[id]
+                        ? data[id].thumbSrc
+                        : null);
+                });
+            });
+
+            if (info) {
+                const response = await axios.get(info, {
+                    responseType: 'arraybuffer',
+                    timeout: 10000
+                });
+
+                return await loadImage(Buffer.from(response.data));
+            }
+        } catch (_) {}
+    }
+
     return null;
 }
 
-// ═══════════════════════════════════════════════
-// 🎨 رسم البطاقة
-// ═══════════════════════════════════════════════
-async function drawCard(avatarBuffer) {
+function drawAvatar(ctx, avatar, name) {
+    const x = 125;
+    const y = 235;
+    const r = 92;
+
+    ctx.save();
+
+    ctx.shadowColor = '#39bfff';
+    ctx.shadowBlur = 24;
+
+    ctx.beginPath();
+    ctx.arc(x, y, r + 7, 0, Math.PI * 2);
+    ctx.fillStyle = '#55caff';
+    ctx.fill();
+
+    ctx.shadowBlur = 0;
+
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.clip();
+
+    if (avatar) {
+        const scale = Math.max((r * 2) / avatar.width, (r * 2) / avatar.height);
+        const width = avatar.width * scale;
+        const height = avatar.height * scale;
+
+        ctx.drawImage(
+            avatar,
+            x - width / 2,
+            y - height / 2,
+            width,
+            height
+        );
+    } else {
+        const g = ctx.createLinearGradient(x - r, y - r, x + r, y + r);
+        g.addColorStop(0, '#142c68');
+        g.addColorStop(1, '#7b39c9');
+
+        ctx.fillStyle = g;
+        ctx.fillRect(x - r, y - r, r * 2, r * 2);
+
+        text(ctx, String(name).slice(0, 1), x, y, 90, '#fff', 'bold', 'center');
+    }
+
+    ctx.restore();
+
+    ctx.save();
+    ctx.shadowColor = '#a64cff';
+    ctx.shadowBlur = 15;
+    ctx.beginPath();
+    ctx.arc(x, y, r + 5, 0, Math.PI * 2);
+    ctx.strokeStyle = '#83dfff';
+    ctx.lineWidth = 5;
+    ctx.stroke();
+    ctx.restore();
+
+    pill(ctx, 145, 293, 62, 'LV.', '#783ce8', '#b34dff');
+    pill(ctx, 145, 330, 62, 'MAX', '#783ce8', '#b34dff');
+}
+
+function drawCard(dev, avatar) {
     const canvas = createCanvas(W, H);
     const ctx = canvas.getContext('2d');
 
-    // 1) خلفية متدرجة داكنة
-    const grad = ctx.createLinearGradient(0, 0, W, H);
-    grad.addColorStop(0, '#141a2e');
-    grad.addColorStop(0.5, '#1a2138');
-    grad.addColorStop(1, '#0f1525');
-    ctx.fillStyle = grad;
+    const bg = ctx.createLinearGradient(0, 0, W, H);
+    bg.addColorStop(0, '#050b24');
+    bg.addColorStop(.45, '#14265f');
+    bg.addColorStop(1, '#080b29');
+
+    ctx.fillStyle = bg;
     ctx.fillRect(0, 0, W, H);
 
-    // 2) زخارف هادئة (دوائر شفافة)
-    ctx.globalAlpha = 0.06;
-    ctx.fillStyle = '#e94560';
-    ctx.beginPath(); ctx.arc(120, 100, 220, 0, Math.PI * 2); ctx.fill();
-    ctx.beginPath(); ctx.arc(W - 100, H - 80, 240, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = '#4ecca3';
-    ctx.beginPath(); ctx.arc(W - 80, 90, 140, 0, Math.PI * 2); ctx.fill();
-    ctx.globalAlpha = 1;
+    const glow = ctx.createRadialGradient(700, 220, 20, 700, 220, 500);
+    glow.addColorStop(0, 'rgba(75,100,255,.30)');
+    glow.addColorStop(1, 'rgba(20,20,80,0)');
 
-    // 3) خطوط أفقية ناعمة أعلى وأسفل
-    ctx.strokeStyle = 'rgba(233, 69, 96, 0.35)';
-    ctx.lineWidth = 1.5;
-    ctx.beginPath(); ctx.moveTo(60, 55); ctx.lineTo(W - 60, 55); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(60, H - 55); ctx.lineTo(W - 60, H - 55); ctx.stroke();
+    ctx.fillStyle = glow;
+    ctx.fillRect(0, 0, W, H);
 
-    // 4) نجوم صغيرة (زخرفة هادئة)
-    ctx.fillStyle = 'rgba(255, 215, 0, 0.35)';
-    const stars = [[150, 90], [W - 200, 130], [W - 120, 380], [300, H - 100]];
-    stars.forEach(([x, y]) => {
-        for (let a = 0; a < 4; a++) {
-            ctx.save();
-            ctx.translate(x, y);
-            ctx.rotate((Math.PI / 4) * a);
-            ctx.fillRect(-1, -6, 2, 12);
-            ctx.restore();
-        }
-    });
-
-    // 5) صورة المطور (دائرة مع توهج)
-    const cx = 210, cy = H / 2, r = 135;
-
-    // هالة خارجية
-    ctx.save();
-    ctx.shadowColor = '#e94560';
-    ctx.shadowBlur = 40;
-    ctx.beginPath();
-    ctx.arc(cx, cy, r + 10, 0, Math.PI * 2);
-    ctx.fillStyle = '#1a1a2e';
-    ctx.fill();
-    ctx.restore();
-
-    // الصورة مقصوصة في دائرة
-    if (avatarBuffer) {
-        try {
-            const img = await loadImage(avatarBuffer);
-            ctx.save();
-            ctx.beginPath();
-            ctx.arc(cx, cy, r, 0, Math.PI * 2);
-            ctx.closePath();
-            ctx.clip();
-            const scale = Math.max((r * 2) / img.width, (r * 2) / img.height);
-            const dw = img.width * scale;
-            const dh = img.height * scale;
-            ctx.drawImage(img, cx - dw / 2, cy - dh / 2, dw, dh);
-            ctx.restore();
-        } catch (e) {
-            console.log('[المطور] فشل رسم الصورة:', e.message);
-        }
-    } else {
-        // دائرة فارغة رمادية إذا فشل التحميل
+    for (let i = 0; i < 20; i++) {
+        ctx.fillStyle = 'rgba(120,170,255,.045)';
         ctx.beginPath();
-        ctx.arc(cx, cy, r, 0, Math.PI * 2);
-        ctx.fillStyle = '#2a2a3e';
+        ctx.arc((i * 173) % W, (i * 91) % H, 2 + i % 4, 0, Math.PI * 2);
         ctx.fill();
-        ctx.font = `bold 60px ${FONT}`;
-        ctx.fillStyle = '#666';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText('?', cx, cy);
     }
 
-    // إطار الصورة
+    rounded(ctx, 7, 7, 986, 476, 17, null, '#688aff', 3);
+    rounded(ctx, 17, 17, 966, 456, 12, null, 'rgba(110,180,255,.55)', 1);
+
+    // الزوايا المضيئة
+    ctx.strokeStyle = '#6bd9ff';
+    ctx.lineWidth = 4;
+
     ctx.beginPath();
-    ctx.arc(cx, cy, r, 0, Math.PI * 2);
-    ctx.strokeStyle = '#e94560';
-    ctx.lineWidth = 5;
+    ctx.moveTo(25, 55);
+    ctx.lineTo(25, 25);
+    ctx.lineTo(65, 25);
+
+    ctx.moveTo(935, 25);
+    ctx.lineTo(975, 25);
+    ctx.lineTo(975, 55);
+
+    ctx.moveTo(25, 435);
+    ctx.lineTo(25, 465);
+    ctx.lineTo(65, 465);
+
+    ctx.moveTo(935, 465);
+    ctx.lineTo(975, 465);
+    ctx.lineTo(975, 435);
     ctx.stroke();
 
-    // تاج فوق الصورة
-    ctx.font = `bold 55px ${FONT}`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'alphabetic';
-    ctx.fillText('👑', cx, cy - r - 12);
+    text(ctx, 'M I R A', 48, 48, 16, '#d8ecff');
+    text(ctx, 'D E V E L O P E R  C A R D', 48, 67, 10, '#9bb9e9', 'bold');
 
-    // 6) النصوص (اليمين)
-    const tx = 410;
+    pill(ctx, 290, 23, 142, 'DEVELOPER', '#f3c400', '#ff9f00');
+    pill(ctx, 445, 23, 112, 'LV. MAX', '#7936d7', '#b34bff');
+    pill(ctx, 570, 23, 112, `AGE ${dev.age}`, '#2874df', '#459eff');
 
-    // العنوان
-    ctx.font = `bold 44px ${FONT}`;
-    ctx.fillStyle = '#ffffff';
-    ctx.textAlign = 'left';
-    ctx.textBaseline = 'alphabetic';
-    ctx.fillText('DEVELOPER', tx, 135);
+    rounded(ctx, 696, 23, 150, 40, 20, '#17264e', '#506b9b');
+    drawFlag(ctx, 704, 30);
+    text(ctx, String(dev.country).toUpperCase(), 817, 43, 13, '#fff', 'bold', 'right');
 
-    // خط تحت العنوان
-    const agrad = ctx.createLinearGradient(tx, 0, tx + 220, 0);
-    agrad.addColorStop(0, '#e94560');
-    agrad.addColorStop(1, 'rgba(233,69,96,0)');
-    ctx.fillStyle = agrad;
-    ctx.fillRect(tx, 150, 220, 4);
+    pill(ctx, 860, 23, 112, dev.role || 'OWNER', '#f5bd00', '#e88c00');
 
-    // الحقول
-    const rows = [
-        { label: 'Name',    value: DEV.name,    y: 220 },
-        { label: 'Country', value: DEV.country, y: 285 },
-        { label: 'Age',     value: String(DEV.age), y: 350 }
+    drawAvatar(ctx, avatar, dev.name);
+
+    text(ctx, String(dev.name).toUpperCase(), 290, 119, 54, '#fff');
+    text(ctx, '" MIRA BOT DEVELOPER "', 292, 157, 17, '#c9d9ff', 'bold');
+
+    // خط الفاصل
+    ctx.strokeStyle = 'rgba(105,160,255,.65)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(290, 180);
+    ctx.lineTo(965, 180);
+    ctx.stroke();
+
+    ctx.fillStyle = '#7bbcff';
+    ctx.beginPath();
+    ctx.arc(290, 180, 4, 0, Math.PI * 2);
+    ctx.arc(965, 180, 4, 0, Math.PI * 2);
+    ctx.fill();
+
+    text(ctx, 'POWER LEVEL', 292, 205, 14, '#a9c8ff');
+    text(ctx, '100%', 955, 205, 15, '#ffce72', 'bold', 'right');
+
+    const bar = ctx.createLinearGradient(290, 0, 960, 0);
+    bar.addColorStop(0, '#29d9ee');
+    bar.addColorStop(.55, '#548bff');
+    bar.addColorStop(1, '#bd4dff');
+
+    rounded(ctx, 290, 222, 670, 24, 12, '#111a48', '#6e91d6', 1);
+    rounded(ctx, 294, 226, 662, 16, 8, bar);
+
+    text(ctx, '∞ / ∞ XP', 292, 266, 12, '#9cb9e8');
+    text(ctx, 'NO LIMITS', 955, 266, 12, '#9cb9e8', 'bold', 'right');
+
+    const boxes = [
+        { x: 42, label: 'NAME', value: dev.name, color: '#4295ff', icon: '●' },
+        { x: 196, label: 'COUNTRY', value: dev.country, color: '#22c9a5', icon: '◎' },
+        { x: 350, label: 'AGE', value: dev.age, color: '#e76da8', icon: '▣' },
+        { x: 504, label: 'ROLE', value: dev.role, color: '#a15bff', icon: '♛' },
+        { x: 658, label: 'STATUS', value: dev.status, color: '#e8b52d', icon: '◉' },
+        { x: 812, label: 'BOT', value: dev.bot, color: '#f28d35', icon: '▣' }
     ];
 
-    rows.forEach(row => {
-        ctx.font = `600 22px ${FONT}`;
-        ctx.fillStyle = 'rgba(160, 170, 200, 0.85)';
-        ctx.fillText(row.label, tx, row.y);
-
-        ctx.font = `bold 30px ${FONT}`;
-        ctx.fillStyle = '#ffffff';
-        ctx.fillText(row.value, tx + 175, row.y);
-    });
-
-    // 7) اسم البوت في الأسفل
-    ctx.font = `500 18px ${FONT}`;
-    ctx.fillStyle = 'rgba(233, 69, 96, 0.9)';
-    ctx.textAlign = 'center';
-    ctx.fillText('★ MIRA BOT ★', W / 2, H - 22);
-
-    return canvas.toBuffer('image/png');
-}
-
-// ═══════════════════════════════════════════════
-// 🚀 تشغيل الأمر
-// ═══════════════════════════════════════════════
-module.exports.run = async ({ api, event, helpers }) => {
-    const { threadID, messageID } = event;
-
-    try {
-        api.setMessageReaction('⏳', messageID, () => {}, true);
-
-        const avatarBuffer = await downloadAvatar(DEV.facebookId);
-        const pngBuffer = await drawCard(avatarBuffer);
-
-        const outFile = path.join(os.tmpdir(), `dev_card_${Date.now()}.png`);
-        fs.writeFileSync(outFile, pngBuffer);
-
-        api.sendMessage(
-            {
-                body: '┏━━━━━━━━━━━━━━━━━━┓\n   👑  الـمـطـور الـرسـمـي\n┗━━━━━━━━━━━━━━━━━━┛',
-                attachment: fs.createReadStream(outFile)
-            },
-            threadID,
-            (err) => {
-                try { fs.unlinkSync(outFile); } catch (e) {}
-                if (err) {
-                    console.log('[المطور] فشل الإرسال:', err);
-                    api.setMessageReaction('❌', messageID, () => {}, true);
-                } else {
-                    api.setMessageReaction('✅', messageID, () => {}, true);
-                }
-            },
-            messageID
+    for (const item of boxes) {
+        rounded(
+            ctx,
+            item.x,
+            292,
+            140,
+            105,
+            14,
+            'rgba(5,12,38,.82)',
+            item.color,
+            1.5
         );
 
-    } catch (e) {
-        console.error('[المطور] خطأ:', e);
-        api.setMessageReaction('❌', messageID, () => {}, true);
-        return helpers.reply(api, event, '❌ تعذر توليد البطاقة: ' + e.message);
+        rounded(ctx, item.x + 1, 292, 138, 4, 2, item.color);
+        text(ctx, item.icon, item.x + 18, 320, 19, item.color);
+        text(ctx, item.label, item.x + 39, 320, 12, '#9bb9e9');
+
+        let size = 26;
+        if (String(item.value).length > 9) size = 19;
+        if (String(item.value).length > 13) size = 15;
+
+        text(ctx, String(item.value).toUpperCase(), item.x + 12, 363, size, '#fff');
+    }
+
+    drawBarcode(ctx, 42, 420);
+    text(ctx, String(dev.cardNumber), 42, 466, 10, '#a9c4ed');
+
+    pill(ctx, 360, 420, 280, 'DEVELOPER CARD', '#3979d9', '#6b4de4');
+    text(ctx, `MIRA DEVELOPER CARD • ${new Date().toISOString().slice(0, 10)}`, 500, 462, 11, '#b4c8ed', 'bold', 'center');
+
+    ctx.beginPath();
+    ctx.arc(820, 447, 5, 0, Math.PI * 2);
+    ctx.fillStyle = '#35e8a0';
+    ctx.shadowColor = '#35e8a0';
+    ctx.shadowBlur = 12;
+    ctx.fill();
+    ctx.shadowBlur = 0;
+
+    text(ctx, 'ACTIVE', 835, 447, 12, '#42edac');
+
+    rounded(ctx, 915, 426, 48, 36, 7, '#d99e30', '#ffe28c', 2);
+    rounded(ctx, 921, 432, 36, 24, 4, '#f5c44c');
+
+    return canvas;
+}
+
+function sendCard(api, event, file) {
+    return new Promise((resolve, reject) => {
+        let finished = false;
+
+        const timer = setTimeout(() => {
+            if (finished) return;
+            finished = true;
+            reject(new Error('انتهت مهلة إرسال البطاقة'));
+        }, 45000);
+
+        const stream = fs.createReadStream(file);
+
+        stream.on('error', err => {
+            if (finished) return;
+            finished = true;
+            clearTimeout(timer);
+            reject(err);
+        });
+
+        try {
+            api.sendMessage(
+                { attachment: stream },
+                event.threadID,
+                err => {
+                    if (finished) return;
+                    finished = true;
+                    clearTimeout(timer);
+
+                    if (err) reject(err);
+                    else resolve(true);
+                },
+                event.messageID
+            );
+        } catch (err) {
+            if (!finished) {
+                finished = true;
+                clearTimeout(timer);
+                reject(err);
+            }
+        }
+    });
+}
+
+module.exports.run = async ({ api, event, cfg }) => {
+    let file = null;
+
+    try {
+        const dev = getDeveloper(cfg);
+
+        const avatar = await getAvatar(api, dev);
+        const canvas = drawCard(dev, avatar);
+
+        file = path.join(
+            os.tmpdir(),
+            `mira_developer_${Date.now()}.png`
+        );
+
+        fs.writeFileSync(file, canvas.toBuffer('image/png'));
+
+        await sendCard(api, event, file);
+
+    } catch (err) {
+        console.error('[بطاقة المطور]', err && err.stack || err);
+
+        try {
+            api.sendMessage(
+                'تعذّر إنشاء بطاقة المطور. راجع سجلات Render لمعرفة السبب.',
+                event.threadID,
+                null,
+                event.messageID
+            );
+        } catch (_) {}
+
+    } finally {
+        if (file) {
+            try {
+                fs.unlinkSync(file);
+            } catch (_) {}
+        }
     }
 };
