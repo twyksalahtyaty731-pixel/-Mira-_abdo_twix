@@ -14,13 +14,61 @@ module.exports.config = {
 };
 
 /* ═══════════ الإعدادات ═══════════ */
-const PRIZE = 50;              // الجائزة بالنقاط
-const TIME_MS = 60 * 1000;     // مدة الجولة
-const MAX_TRIES = 2;           // محاولات جلب صورة (خفّضناها من 4)
-const RECENT_KEEP = 25;        // لا تتكرر الشخصية قبل مرور هذا العدد من الجولات
+const PRIZE = 50;
+const TIME_MS = 60 * 1000;
+const MAX_TRIES = 3;
+const RECENT_KEEP = 35;        // زيادة العدد لمنع تكرار الشخصيات بشكل أسرع
 
-/* ═══════════ قاعدة الشخصيات ═══════════ */
+/* ═══════════ قاعدة الشخصيات (موسّعة + حديثة) ═══════════ */
 const CHARACTERS = [
+    // ===== أنميات حديثة 2024-2025 =====
+    // Frieren: Beyond Journey's End
+    ['Frieren', 'Frieren: Beyond Journey\'s End', ['فيرين', 'فريرين', 'فريلين']],
+    ['Fern', 'Frieren: Beyond Journey\'s End', ['فيرن', 'فيرن']],
+    ['Stark', 'Frieren: Beyond Journey\'s End', ['ستارك', 'ستارك']],
+    ['Himmel', 'Frieren: Beyond Journey\'s End', ['هيمل', 'هيميل']],
+    // Solo Leveling
+    ['Sung Jin-Woo', 'Solo Leveling', ['سونغ جين وو', 'جين وو', 'سونغ جين وو'], { alt: ['jin woo', 'jinwoo', 'sung jinwoo'] }],
+    ['Cha Hae-In', 'Solo Leveling', ['تشا هاي إن', 'تشا هاي ان']],
+    // Dandadan
+    ['Momo Ayase', 'Dandadan', ['مومو', 'مومو أياسي']],
+    ['Ken Takakura (Okarun)', 'Dandadan', ['أوكارون', 'أوكارن', 'كين تاكاكورا']],
+    // Gachiakuta
+    ['Rudo', 'Gachiakuta', ['رودو', 'رودو']],
+    // The Apothecary Diaries
+    ['Maomao', 'The Apothecary Diaries', ['ماوماو', 'ماو ماو']],
+    ['Jinshi', 'The Apothecary Diaries', ['جينشي', 'جينشي']],
+    // Chainsaw Man (شخصيات إضافية)
+    ['Denji', 'Chainsaw Man', ['دنجي', 'دينجي']],
+    ['Makima', 'Chainsaw Man', ['ماكيما', 'ماكيما']],
+    ['Aki Hayakawa', 'Chainsaw Man', ['اكي', 'أكي', 'اكي هاياكاوا']],
+    ['Power', 'Chainsaw Man', ['باور', 'باور']],
+    // Jujutsu Kaisen (شخصيات إضافية)
+    ['Yuji Itadori', 'Jujutsu Kaisen', ['يوجي', 'يوجي ايتادوري', 'يوجى']],
+    ['Satoru Gojo', 'Jujutsu Kaisen', ['غوجو', 'جوجو', 'ساتورو غوجو', 'قوجو']],
+    ['Megumi Fushiguro', 'Jujutsu Kaisen', ['ميغومي', 'ميجومي', 'ميغومي فوشيغورو']],
+    ['Nobara Kugisaki', 'Jujutsu Kaisen', ['نوبارا', 'نوبارا كوغيساكي']],
+    ['Ryomen Sukuna', 'Jujutsu Kaisen', ['سوكونا', 'سكونا', 'ريومن سوكونا']],
+    ['Toji Fushiguro', 'Jujutsu Kaisen', ['توجي', 'توجي فوشيغورو']],
+    ['Maki Zenin', 'Jujutsu Kaisen', ['ماكي', 'ماكي زينين']],
+    // Spy x Family (شخصيات إضافية)
+    ['Anya Forger', 'Spy x Family', ['انيا', 'أنيا', 'انيا فورجر']],
+    ['Loid Forger', 'Spy x Family', ['لويد', 'لويد فورجر']],
+    ['Yor Forger', 'Spy x Family', ['يور', 'يور فورجر']],
+    // Oshi no Ko
+    ['Kana Arima', 'Oshi no Ko', ['كانا', 'كانا أريما']],
+    // The Dangers in My Heart
+    ['Kyotaro Ichikawa', 'The Dangers in My Heart', ['كيوتارو', 'كيوتارو إيتشيكاوا']],
+    ['Anna Yamada', 'The Dangers in My Heart', ['آنا', 'آنا يامادا']],
+    // Alya Sometimes Hides Her Feelings in Russian
+    ['Yuki Suou', 'Alya Sometimes Hides Her Feelings in Russian', ['يوكي', 'يوكي سوو']],
+    ['Alya', 'Alya Sometimes Hides Her Feelings in Russian', ['أليا', 'اليا']],
+    // Blue Lock (شخصيات إضافية)
+    ['Yoichi Isagi', 'Blue Lock', ['ايساغي', 'إيساغي', 'يويتشي ايساغي']],
+    ['Meguru Bachira', 'Blue Lock', ['باتشيرا', 'ميغورو باتشيرا']],
+    ['Rin Itoshi', 'Blue Lock', ['رين', 'رين إيتوشي']],
+
+    // ===== شخصيات كلاسيكية وشائعة (موسّعة) =====
     // Naruto
     ['Naruto Uzumaki', 'Naruto', ['ناروتو', 'ناروتو اوزوماكي', 'ناروتو أوزوماكي']],
     ['Sasuke Uchiha', 'Naruto', ['ساسكي', 'ساسكي اوتشيها', 'ساسوكي']],
@@ -77,15 +125,7 @@ const CHARACTERS = [
     ['Kyojuro Rengoku', 'Demon Slayer', ['رينغوكو', 'رينجوكو', 'كيوجورو']],
     ['Shinobu Kocho', 'Demon Slayer', ['شينوبو', 'شينوبو كوتشو']],
     ['Muzan Kibutsuji', 'Demon Slayer', ['موزان', 'موزان كيبوتسوجي']],
-    // Jujutsu Kaisen
-    ['Yuji Itadori', 'Jujutsu Kaisen', ['يوجي', 'يوجي ايتادوري', 'يوجى']],
-    ['Satoru Gojo', 'Jujutsu Kaisen', ['غوجو', 'جوجو', 'ساتورو غوجو', 'قوجو']],
-    ['Megumi Fushiguro', 'Jujutsu Kaisen', ['ميغومي', 'ميجومي', 'ميغومي فوشيغورو']],
-    ['Nobara Kugisaki', 'Jujutsu Kaisen', ['نوبارا', 'نوبارا كوغيساكي']],
-    ['Ryomen Sukuna', 'Jujutsu Kaisen', ['سوكونا', 'سكونا', 'ريومن سوكونا']],
-    ['Toji Fushiguro', 'Jujutsu Kaisen', ['توجي', 'توجي فوشيغورو']],
-    ['Maki Zenin', 'Jujutsu Kaisen', ['ماكي', 'ماكي زينين']],
-    // My Hero Academia
+    // My Hero Academia (شخصيات إضافية)
     ['Izuku Midoriya', 'My Hero Academia', ['ديكو', 'ايزوكو', 'إيزوكو', 'ايزوكو ميدوريا']],
     ['Katsuki Bakugo', 'My Hero Academia', ['باكوغو', 'باكوجو', 'كاتسوكي باكوغو'], { alt: ['bakugou'] }],
     ['Shoto Todoroki', 'My Hero Academia', ['شوتو', 'شوتو تودوروكي', 'تودوروكي']],
@@ -132,63 +172,68 @@ const CHARACTERS = [
     // Steins;Gate
     ['Rintarou Okabe', 'Steins;Gate', ['اوكابي', 'أوكابي', 'اوكابي رينتارو'], { alt: ['okabe', 'okabe rintaro', 'kyouma hououin'] }],
     ['Kurisu Makise', 'Steins;Gate', ['كريسو', 'كريسو ماكيسي']],
-    // Spy x Family
-    ['Anya Forger', 'Spy x Family', ['انيا', 'أنيا', 'انيا فورجر']],
-    ['Loid Forger', 'Spy x Family', ['لويد', 'لويد فورجر']],
-    ['Yor Forger', 'Spy x Family', ['يور', 'يور فورجر']],
-    // Chainsaw Man
-    ['Denji', 'Chainsaw Man', ['دنجي', 'دينجي']],
-    ['Makima', 'Chainsaw Man', ['ماكيما', 'ماكيما']],
-    ['Aki Hayakawa', 'Chainsaw Man', ['اكي', 'أكي', 'اكي هاياكاوا']],
-    // Haikyuu / Blue Lock / Sports
+    // Haikyuu
     ['Tobio Kageyama', 'Haikyuu!!', ['كاجيياما', 'توبيو', 'توبيو كاجيياما']],
-    ['Yoichi Isagi', 'Blue Lock', ['ايساغي', 'إيساغي', 'يويتشي ايساغي']],
-    ['Tsubasa Ozora', 'Captain Tsubasa', ['سوباسا', 'تسوباسا', 'سوباسا اوزورا']],
-    // Dr. Stone / Mob Psycho / Re:Zero / Konosuba
+    // Dr. Stone
     ['Senku Ishigami', 'Dr. Stone', ['سينكو', 'سينكو ايشيغامي']],
+    // Mob Psycho 100
     ['Shigeo Kageyama', 'Mob Psycho 100', ['موب', 'شيغيو', 'موب كاجيياما']],
+    // Re:Zero
     ['Subaru Natsuki', 'Re:Zero', ['سوبارو', 'سوبارو ناتسوكي']],
     ['Rem', 'Re:Zero', ['ريم'], { q: 'Rem', chk: ['rem'] }],
     ['Emilia', 'Re:Zero', ['اميليا', 'إميليا']],
+    // KonoSuba
     ['Megumin', 'KonoSuba', ['ميغومين', 'ميجومين']],
     ['Kazuma Satou', 'KonoSuba', ['كازوما', 'كازوما ساتو']],
-    // أخرى
+    // Overlord
     ['Ainz Ooal Gown', 'Overlord', ['اينز', 'إينز', 'اينز اول غاون', 'اينز اوول جاون']],
+    // Vinland Saga
     ['Thorfinn', 'Vinland Saga', ['ثورفين', 'تورفين']],
+    // Berserk
     ['Guts', 'Berserk', ['غاتس', 'جاتس', 'قاتس'], { q: 'Guts', chk: ['guts'] }],
+    // Cowboy Bebop
     ['Spike Spiegel', 'Cowboy Bebop', ['سبايك', 'سبايك سبيغل']],
+    // Neon Genesis Evangelion
     ['Shinji Ikari', 'Neon Genesis Evangelion', ['شينجي', 'شينجي ايكاري']],
     ['Rei Ayanami', 'Neon Genesis Evangelion', ['راي', 'ري', 'راي ايانامي']],
     ['Asuka Langley Soryu', 'Neon Genesis Evangelion', ['اسكا', 'أسكا', 'اسوكا']],
+    // Gintama
     ['Gintoki Sakata', 'Gintama', ['جينتوكي', 'جينتوكي ساكاتا']],
+    // Akame ga Kill
     ['Akame', 'Akame ga Kill', ['اكامي', 'أكامي'], { q: 'Akame', chk: ['akame'] }],
+    // Tokyo Revengers
     ['Takemichi Hanagaki', 'Tokyo Revengers', ['تاكيميتشي', 'تاكيميتشي هاناغاكي']],
     ['Manjiro Sano', 'Tokyo Revengers', ['مايكي', 'مانجيرو', 'مانجيرو سانو'], { alt: ['mikey'] }],
+    // Bungo Stray Dogs
     ['Osamu Dazai', 'Bungo Stray Dogs', ['دازاي', 'اوسامو دازاي']],
     ['Chuuya Nakahara', 'Bungo Stray Dogs', ['تشويا', 'شويا', 'تشويا ناكاهارا'], { alt: ['chuya'] }],
+    // That Time I Got Reincarnated as a Slime
     ['Rimuru Tempest', 'That Time I Got Reincarnated as a Slime', ['ريمورو', 'ريمورو تيمبست']],
-    ['Sung Jin-Woo', 'Solo Leveling', ['سونغ جين وو', 'جين وو', 'سونج جين وو'], { alt: ['jin woo', 'jinwoo', 'sung jinwoo'] }],
+    // Pokémon
     ['Ash Ketchum', 'Pokémon', ['اش', 'آش', 'اش كيتشوم', 'ساتوشي']],
     ['Pikachu', 'Pokémon', ['بيكاتشو', 'بيكاتشو']],
+    // Doraemon
     ['Doraemon', 'Doraemon', ['دورايمون', 'دورايمون']],
     ['Nobita Nobi', 'Doraemon', ['نوبيتا', 'نوبيتا نوبي']],
+    // Detective Conan
     ['Conan Edogawa', 'Detective Conan', ['كونان', 'كونان ادوغاوا', 'كونان إيدوغاوا']],
     ['Ran Mouri', 'Detective Conan', ['ران', 'ران موري']],
+    // Sailor Moon
     ['Usagi Tsukino', 'Sailor Moon', ['اوساجي', 'أوساجي', 'اوساجي تسوكينو']]
 ];
 
-/* ═══════════ تطبيع النص والمطابقة ═══════════ */
+/* ═══════════ تطبيع النص والمطابقة (بدون تغيير) ═══════════ */
 function norm(s) {
     return String(s || '')
         .toLowerCase()
-        .replace(/[\u064B-\u065F\u0670\u0640]/g, '')   // تشكيل + تطويل
+        .replace(/[\u064B-\u065F\u0670\u0640]/g, '')
         .replace(/[إأآٱ]/g, 'ا')
         .replace(/ى/g, 'ي')
         .replace(/ة/g, 'ه')
         .replace(/ؤ/g, 'و')
         .replace(/ئ/g, 'ي')
         .replace(/(.)\1{2,}/g, '$1$1')
-        .replace(/[،؛؟٪٬«»]/g, ' ')                     // ← علامات ترقيم عربية
+        .replace(/[،؛؟٪٬«»]/g, ' ')
         .replace(/[^\u0600-\u06FFa-z0-9\s]/g, ' ')
         .replace(/\s+/g, ' ')
         .trim();
@@ -241,7 +286,7 @@ const ALIASES = CHARACTERS.map(buildAliases);
 const ALIAS_OWNER = new Map();
 ALIASES.forEach((list, i) => list.forEach(al => { if (!ALIAS_OWNER.has(al)) ALIAS_OWNER.set(al, new Set()); ALIAS_OWNER.get(al).add(i); }));
 
-/* ═══════════ HTTP Client محسّن ═══════════ */
+/* ═══════════ HTTP Client (محسّن) ═══════════ */
 function httpGet(url, asBuffer, redirects = 4) {
     return new Promise((resolve, reject) => {
         const headers = {
@@ -318,7 +363,7 @@ function findImageUrlAniList(name) {
     });
 }
 
-/* ═══════════ جلب رابط الصورة ═══════════ */
+/* ═══════════ جلب رابط الصورة (بجودة عالية) ═══════════ */
 async function findImageUrl(index) {
     if (imageUrlCache.has(index)) return imageUrlCache.get(index);
     const entry = CHARACTERS[index];
@@ -357,7 +402,10 @@ async function findImageUrl(index) {
     let best = null, bestScore = 0;
     for (const c of list) {
         const name = norm(c.name || '');
-        const img = c.images?.jpg?.image_url;
+        // ✅ استخدام صور عالية الجودة (large_image_url) بدل العادية
+        const img = c.images?.jpg?.large_image_url || 
+                    c.images?.webp?.large_image_url || 
+                    c.images?.jpg?.image_url;
         if (!img || /questionmark/i.test(img)) continue;
         let score = 0;
         for (const t of chk) if (name.includes(t)) score++;
@@ -437,8 +485,6 @@ const sendText = (api, text, threadID, replyTo) => new Promise(resolve => {
 /* ═══════════ بدء جولة ═══════════ */
 async function startRound(api, event) {
     const threadID = String(event.threadID);
-
-    // 🔔 إشعار فوري حتى لا يبدو البوت ميتًا
     await sendText(api, '🎭 جاري تحضير شخصية... انتظر لحظات', threadID, event.messageID);
 
     let index = null, photo = null;
@@ -524,7 +570,6 @@ module.exports.run = async ({ api, event, args, helpers, states, cfg }) => {
 
 /* ═══════════ استقبال الإجابات ═══════════ */
 async function onAnswer({ api, event, helpers, states, cfg }) {
-    // 🔍 فلتر type مرن (كان يرفض الرسائل التي بلا type)
     if (event.type && event.type !== 'message' && event.type !== 'message_reply') return false;
     if (!event.body || !event.senderID) return false;
 
@@ -539,7 +584,6 @@ async function onAnswer({ api, event, helpers, states, cfg }) {
     const uid = String(event.senderID);
     if (uid === String(api.getCurrentUserID())) return false;
 
-    // تجاهل الأوامر
     const prefix = (shared.cfg && shared.cfg.PREFIX) || '.';
     if (String(event.body).trim().startsWith(prefix)) return false;
 
@@ -548,15 +592,6 @@ async function onAnswer({ api, event, helpers, states, cfg }) {
         seen.add(event.messageID);
         if (seen.size > 500) seen.delete(seen.values().next().value);
     }
-
-    // 🔍 لوق تشخيصي
-    console.log('[شخصيات]', {
-        thread: threadID,
-        sender: uid,
-        type: event.type,
-        body: String(event.body).slice(0, 40),
-        matched: matches(event.body, round.aliases, round.index)
-    });
 
     if (!matches(event.body, round.aliases, round.index)) return false;
 
