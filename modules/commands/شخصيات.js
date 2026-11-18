@@ -13,23 +13,13 @@ module.exports.config = {
     adminOnly: false
 };
 
-/**
- * 🎭 لعبة شخصيات الأنمي
- *   .شخصيات          يرسل صورة شخصية جديدة (من أنميات مختلفة في كل مرة)
- *   .شخصيات تلميح    يعطي اسم الأنمي وعدد حروف الاسم
- * أول من يكتب اسم الشخصية صح (بالعربي أو الإنجليزي، حتى لو أخطأ بحرف) يربح الجائزة ✅
- * الصور تُجلب تلقائياً من Jikan (MyAnimeList) باسم الشخصية.
- */
-
+/* ═══════════ الإعدادات ═══════════ */
 const PRIZE = 50;              // الجائزة بالنقاط
 const TIME_MS = 60 * 1000;     // مدة الجولة
-const MAX_TRIES = 4;           // عدد المحاولات لجلب صورة قبل الاستسلام
+const MAX_TRIES = 2;           // محاولات جلب صورة (خفّضناها من 4)
 const RECENT_KEEP = 25;        // لا تتكرر الشخصية قبل مرور هذا العدد من الجولات
 
-/* ═══════════ قاعدة الشخصيات ═══════════
- * [الاسم الإنجليزي (للبحث عن الصورة), الأنمي, [أسماء عربية مقبولة], خيارات اختيارية]
- * الخيارات: q = نص بحث مختلف، alt = أسماء إنجليزية مقبولة إضافية، chk = كلمات للتأكد من صحة نتيجة البحث
- */
+/* ═══════════ قاعدة الشخصيات ═══════════ */
 const CHARACTERS = [
     // Naruto
     ['Naruto Uzumaki', 'Naruto', ['ناروتو', 'ناروتو اوزوماكي', 'ناروتو أوزوماكي']],
@@ -198,6 +188,7 @@ function norm(s) {
         .replace(/ؤ/g, 'و')
         .replace(/ئ/g, 'ي')
         .replace(/(.)\1{2,}/g, '$1$1')
+        .replace(/[،؛؟٪٬«»]/g, ' ')                     // ← علامات ترقيم عربية
         .replace(/[^\u0600-\u06FFa-z0-9\s]/g, ' ')
         .replace(/\s+/g, ' ')
         .trim();
@@ -237,7 +228,6 @@ function matches(answer, aliases, index) {
     for (const al of aliases) {
         if (a === al) return true;
     }
-    // لا نقبل التقريب إن كان الجواب اسماً كاملاً لشخصية أخرى (مثل ايرين مقابل ايزين)
     const owners = ALIAS_OWNER.get(a);
     if (owners && !owners.has(index)) return false;
     for (const al of aliases) {
@@ -248,16 +238,32 @@ function matches(answer, aliases, index) {
 }
 
 const ALIASES = CHARACTERS.map(buildAliases);
-const ALIAS_OWNER = new Map();   // اسم مطبَّع -> الشخصيات التي يخصها
+const ALIAS_OWNER = new Map();
 ALIASES.forEach((list, i) => list.forEach(al => { if (!ALIAS_OWNER.has(al)) ALIAS_OWNER.set(al, new Set()); ALIAS_OWNER.get(al).add(i); }));
 
-/* ═══════════ الشبكة (Jikan + تحميل الصورة) ═══════════ */
+/* ═══════════ HTTP Client محسّن ═══════════ */
 function httpGet(url, asBuffer, redirects = 4) {
     return new Promise((resolve, reject) => {
-        const req = https.get(url, { headers: { 'User-Agent': 'Mozilla/5.0 (MiraBot)', Accept: '*/*' }, timeout: 12000 }, res => {
+        const headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+            'Accept': asBuffer ? 'image/avif,image/webp,image/*,*/*;q=0.8' : 'application/json,text/plain,*/*',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Referer': 'https://myanimelist.net/',
+            'Connection': 'keep-alive'
+        };
+        const req = https.get(url, { headers, timeout: 15000 }, res => {
             if ([301, 302, 303, 307, 308].includes(res.statusCode) && res.headers.location && redirects > 0) {
                 res.resume();
                 return resolve(httpGet(new URL(res.headers.location, url).toString(), asBuffer, redirects - 1));
+            }
+            if (res.statusCode === 429) {
+                res.resume();
+                const wait = Math.min(parseInt(res.headers['retry-after'] || '2', 10) * 1000, 5000);
+                console.log('[شخصيات] 429 rate limit — انتظار', wait, 'ms');
+                return setTimeout(() => {
+                    if (redirects > 0) resolve(httpGet(url, asBuffer, redirects - 1));
+                    else reject(new Error('429 rate limit'));
+                }, wait);
             }
             if (res.statusCode !== 200) { res.resume(); return reject(new Error('HTTP ' + res.statusCode)); }
             const chunks = [];
@@ -273,37 +279,103 @@ function httpGet(url, asBuffer, redirects = 4) {
 }
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
-const imageUrlCache = new Map();   // index -> رابط الصورة
+const imageUrlCache = new Map();
 
+/* ═══════════ AniList fallback ═══════════ */
+function findImageUrlAniList(name) {
+    return new Promise(resolve => {
+        const body = JSON.stringify({
+            query: `query ($s: String) { Character(search: $s) { name { full } image { large } } }`,
+            variables: { s: name }
+        });
+        const req = https.request({
+            hostname: 'graphql.anilist.co',
+            path: '/',
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Content-Length': Buffer.byteLength(body),
+                'Accept': 'application/json',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
+            },
+            timeout: 12000
+        }, res => {
+            const chunks = [];
+            res.on('data', c => chunks.push(c));
+            res.on('end', () => {
+                try {
+                    const json = JSON.parse(Buffer.concat(chunks).toString());
+                    const img = json?.data?.Character?.image?.large || null;
+                    if (img) console.log('[شخصيات] AniList نجح لـ', name);
+                    resolve(img);
+                } catch (e) { resolve(null); }
+            });
+        });
+        req.on('error', () => resolve(null));
+        req.on('timeout', () => { req.destroy(); resolve(null); });
+        req.write(body);
+        req.end();
+    });
+}
+
+/* ═══════════ جلب رابط الصورة ═══════════ */
 async function findImageUrl(index) {
     if (imageUrlCache.has(index)) return imageUrlCache.get(index);
     const entry = CHARACTERS[index];
     const opts = entry[3] || {};
     const q = opts.q || entry[0];
     const chk = (opts.chk || norm(entry[0]).split(' ').filter(t => t.length >= 3));
-    const url = `https://api.jikan.moe/v4/characters?q=${encodeURIComponent(q)}&order_by=favorites&sort=desc&limit=5`;
 
-    let json = null;
-    for (let attempt = 0; attempt < 2 && !json; attempt++) {
-        try { json = JSON.parse(await httpGet(url, false)); }
-        catch (e) { if (attempt === 0) await sleep(1300); }
-    }
-    const list = (json && json.data) || [];
-    for (const c of list) {
-        const name = norm(c.name || '');
-        const img = c.images && c.images.jpg && c.images.jpg.image_url;
-        if (!img || /questionmark/i.test(img)) continue;
-        if (chk.some(t => name.includes(t))) {
-            imageUrlCache.set(index, img);
-            return img;
+    const url = `https://api.jikan.moe/v4/characters?q=${encodeURIComponent(q)}&limit=10`;
+
+    let json = null, lastErr = null;
+    for (let attempt = 0; attempt < 3 && !json; attempt++) {
+        try {
+            json = JSON.parse(await httpGet(url, false));
+        } catch (e) {
+            lastErr = e;
+            console.log(`[شخصيات] Jikan محاولة ${attempt + 1}/3 فشلت (${q}):`, e.message);
+            if (attempt < 2) await sleep(1500 * (attempt + 1));
         }
     }
-    return null;
+
+    if (!json) {
+        console.log(`[شخصيات] Jikan استسلمت لـ "${q}" — آخر خطأ:`, lastErr?.message, '— جرّب AniList');
+        const alt = await findImageUrlAniList(q);
+        if (alt) { imageUrlCache.set(index, alt); return alt; }
+        return null;
+    }
+
+    const list = json.data || [];
+    if (!list.length) {
+        console.log(`[شخصيات] Jikan: صفر نتائج لـ "${q}" — جرّب AniList`);
+        const alt = await findImageUrlAniList(q);
+        if (alt) { imageUrlCache.set(index, alt); return alt; }
+        return null;
+    }
+
+    let best = null, bestScore = 0;
+    for (const c of list) {
+        const name = norm(c.name || '');
+        const img = c.images?.jpg?.image_url;
+        if (!img || /questionmark/i.test(img)) continue;
+        let score = 0;
+        for (const t of chk) if (name.includes(t)) score++;
+        if (score > bestScore) { bestScore = score; best = img; }
+    }
+    if (!best) {
+        console.log(`[شخصيات] Jikan: نتائج بدون تطابق لـ "${q}" — جرّب AniList`);
+        const alt = await findImageUrlAniList(q);
+        if (alt) { imageUrlCache.set(index, alt); return alt; }
+        return null;
+    }
+    imageUrlCache.set(index, best);
+    return best;
 }
 
 /* ═══════════ حالة اللعبة ═══════════ */
-const rounds = new Map();      // threadID -> جولة قائمة
-const recent = new Map();      // threadID -> آخر الشخصيات
+const rounds = new Map();
+const recent = new Map();
 const seen = new Set();
 const shared = { states: null, helpers: null, cfg: null };
 
@@ -321,7 +393,6 @@ function rememberIndex(threadID, index) {
     recent.set(threadID, used);
 }
 
-/** يضيف النقاط لرصيد الشخص، ويجرّب عدة أسماء دوال شائعة في نظام الحالات */
 function addPoints(states, uid, amount) {
     if (!states) return false;
     try {
@@ -367,7 +438,10 @@ const sendText = (api, text, threadID, replyTo) => new Promise(resolve => {
 async function startRound(api, event) {
     const threadID = String(event.threadID);
 
-    let index = null, imageUrl = null, photo = null;
+    // 🔔 إشعار فوري حتى لا يبدو البوت ميتًا
+    await sendText(api, '🎭 جاري تحضير شخصية... انتظر لحظات', threadID, event.messageID);
+
+    let index = null, photo = null;
     for (let t = 0; t < MAX_TRIES && !photo; t++) {
         const i = pickIndex(threadID);
         rememberIndex(threadID, i);
@@ -375,9 +449,12 @@ async function startRound(api, event) {
         if (!url) continue;
         try {
             const buf = await httpGet(url, true);
-            if (buf && buf.length > 1500) { index = i; imageUrl = url; photo = buf; }
-        } catch (e) { /* جرّب شخصية أخرى */ }
-        await sleep(400);   // احترام حدود Jikan
+            if (buf && buf.length > 1500) { index = i; photo = buf; }
+            else console.log('[شخصيات] صورة صغيرة/فارغة، تجاهل');
+        } catch (e) {
+            console.log('[شخصيات] فشل تحميل الصورة:', e.message);
+        }
+        await sleep(300);
     }
     if (!photo) {
         return sendText(api, '⚠️ تعذّر جلب صورة الشخصية الآن، حاول مرة أخرى بعد قليل.', threadID, event.messageID);
@@ -405,7 +482,6 @@ async function startRound(api, event) {
         }, event.messageID);
     });
 
-    // انتهاء الوقت: نكشف الإجابة
     round.timer = setTimeout(async () => {
         if (rounds.get(threadID) !== round || round.done) return;
         round.done = true;
@@ -448,11 +524,13 @@ module.exports.run = async ({ api, event, args, helpers, states, cfg }) => {
 
 /* ═══════════ استقبال الإجابات ═══════════ */
 async function onAnswer({ api, event, helpers, states, cfg }) {
-    if (event.type !== 'message' && event.type !== 'message_reply') return false;
+    // 🔍 فلتر type مرن (كان يرفض الرسائل التي بلا type)
+    if (event.type && event.type !== 'message' && event.type !== 'message_reply') return false;
+    if (!event.body || !event.senderID) return false;
+
     const threadID = String(event.threadID || '');
     const round = rounds.get(threadID);
     if (!round || round.done) return false;
-    if (!event.body) return false;
 
     shared.states = states || shared.states;
     shared.helpers = helpers || shared.helpers;
@@ -471,9 +549,17 @@ async function onAnswer({ api, event, helpers, states, cfg }) {
         if (seen.size > 500) seen.delete(seen.values().next().value);
     }
 
+    // 🔍 لوق تشخيصي
+    console.log('[شخصيات]', {
+        thread: threadID,
+        sender: uid,
+        type: event.type,
+        body: String(event.body).slice(0, 40),
+        matched: matches(event.body, round.aliases, round.index)
+    });
+
     if (!matches(event.body, round.aliases, round.index)) return false;
 
-    // أول إجابة صحيحة فقط
     if (round.done) return false;
     round.done = true;
     clearTimeout(round.timer);
