@@ -14,29 +14,18 @@ module.exports.config = {
     adminOnly: false
 };
 
-/**
- * الأدوار:
- *   الصافع  = صاحب الأمر (الذي كتب .صفع)
- *   المصفوع = الشخص الذي تم الرد على رسالته (أو الذي عمل له منشن)
- *
- * أوامر المطور لضبط الصور على القالب:
- *   .صفع شبكة                       يرسل القالب عليه شبكة أرقام وإحداثيات الصورتين الحالية
- *   .صفع ضبط sx sy sr  tx ty tr      الصافع (x,y,r) ثم المصفوع (x,y,r) أرقام بين 0 و1
- *   .صفع عكس                        يبدّل مكان الصورتين (إن كان الصافع على الجهة الأخرى)
- *   .صفع ضبط افتراضي                 يرجع للإحداثيات الافتراضية
- */
-
 // ═══════════════════════════════════════════════
-// 🖼️ رابط الصورة (القالب)
+// 🖼️ رابط القالب
 // ═══════════════════════════════════════════════
 const TEMPLATE_URL = 'https://i.ibb.co/kZsMr4r/6bc5547007e36898e53cc49d536edc9c.jpg';
 
 // ═══════════════════════════════════════════════
-// 📐 الإحداثيات الافتراضية (xPct,yPct = مركز الوجه كنسبة من العرض والارتفاع، rPct = نصف القطر كنسبة من العرض)
+// 📐 الإحداثيات (مصححة: الصافع على اليسار، المصفوع على اليمين)
 // ═══════════════════════════════════════════════
+const LAYOUT_VERSION = 2;
 const DEFAULT_COORDS = {
-    slapper: { xPct: 0.70, yPct: 0.30, rPct: 0.12 }, // مكان الصافع (اليمين)
-    slapped: { xPct: 0.30, yPct: 0.30, rPct: 0.12 }  // مكان المصفوع (اليسار)
+    slapper: { xPct: 0.30, yPct: 0.30, rPct: 0.12 }, // اليسار = الصافع (أنت)
+    slapped: { xPct: 0.70, yPct: 0.30, rPct: 0.12 }  // اليمين = المصفوع
 };
 
 const SAVED = path.join(__dirname, '..', '..', 'Heba_DB', 'slap_layout.json');
@@ -44,16 +33,30 @@ const SAVED = path.join(__dirname, '..', '..', 'Heba_DB', 'slap_layout.json');
 const validPos = p => p && [p.xPct, p.yPct, p.rPct].every(v => typeof v === 'number' && v > 0 && v < 1);
 const validCoords = c => c && validPos(c.slapper) && validPos(c.slapped);
 
+/* ═══════════ تحميل/حفظ الإحداثيات مع هجرة تلقائية ═══════════ */
 function loadCoords() {
     try {
-        const c = JSON.parse(fs.readFileSync(SAVED, 'utf8'));
-        if (validCoords(c)) return c;
+        const raw = JSON.parse(fs.readFileSync(SAVED, 'utf8'));
+        const coords = raw.coords || raw;
+        const ver = raw.version || 1;
+
+        // 🔄 هجرة: لو الملف من نسخة قديمة، نعيد الضبط للافتراضي المصحح
+        if (ver < LAYOUT_VERSION) {
+            console.log('[صفع] 🔄 ترقية تخطيط الصور للنسخة', LAYOUT_VERSION);
+            saveCoords(DEFAULT_COORDS);
+            return JSON.parse(JSON.stringify(DEFAULT_COORDS));
+        }
+        if (validCoords(coords)) return coords;
     } catch (e) { /* لا شيء محفوظ */ }
     return JSON.parse(JSON.stringify(DEFAULT_COORDS));
 }
+
 function saveCoords(c) {
     fs.ensureDirSync(path.dirname(SAVED));
-    fs.writeFileSync(SAVED, JSON.stringify(c, null, 2));
+    fs.writeFileSync(SAVED, JSON.stringify({
+        version: LAYOUT_VERSION,
+        coords: c
+    }, null, 2));
 }
 
 const normalizeDigits = s => String(s || '')
@@ -61,15 +64,17 @@ const normalizeDigits = s => String(s || '')
     .replace(/[۰-۹]/g, d => '۰۱۲۳۴۵۶۷۸۹'.indexOf(d))
     .replace(/٫/g, '.');
 
-// ═══════════════════════════════════════════════
-// 📥 تحميل الصور (القالب يُحمّل مرة واحدة ويُحفظ في الذاكرة)
-// ═══════════════════════════════════════════════
+/* ═══════════ تحميل القالب والصور ═══════════ */
 let templateCache = null;
 
 async function fetchBuffer(url, timeout = 15000) {
     if (!url) return null;
     try {
-        const res = await axios.get(url, { responseType: 'arraybuffer', timeout, maxContentLength: 10 * 1024 * 1024 });
+        const res = await axios.get(url, {
+            responseType: 'arraybuffer',
+            timeout,
+            maxContentLength: 10 * 1024 * 1024
+        });
         return Buffer.from(res.data);
     } catch (e) { return null; }
 }
@@ -94,7 +99,6 @@ function drawCircleImage(ctx, img, cx, cy, r) {
     ctx.drawImage(img, cx - w / 2, cy - h / 2, w, h);
     ctx.restore();
 
-    // إطار أبيض حول الصورة
     ctx.beginPath();
     ctx.arc(cx, cy, r, 0, Math.PI * 2);
     ctx.strokeStyle = '#FFFFFF';
@@ -116,22 +120,19 @@ async function sendImage(api, event, body, buffer, mentions) {
     }
 }
 
-// ═══════════════════════════════════════════════
-// 🛠️ أوامر المطور الفرعية
-// ═══════════════════════════════════════════════
+/* ═══════════ أوامر المطور ═══════════ */
 async function adminSub(sub, rest, { api, event, helpers }) {
     const reply = t => helpers.reply(api, event, t);
     const f = n => Number(n).toFixed(3);
 
     if (sub === 'شبكة' || sub === 'grid') {
         const tpl = await getTemplate();
-        if (!tpl) return reply('❌ تعذّر تحميل القالب من الرابط');
+        if (!tpl) return reply('❌ تعذّر تحميل القالب');
         const img = await loadImage(tpl);
         const canvas = createCanvas(img.width, img.height);
         const ctx = canvas.getContext('2d');
         ctx.drawImage(img, 0, 0);
 
-        // شبكة أعشار
         ctx.font = `bold ${Math.round(img.width * 0.035)}px sans-serif`;
         ctx.textBaseline = 'top';
         for (let i = 1; i <= 9; i++) {
@@ -144,7 +145,6 @@ async function adminSub(sub, rest, { api, event, helpers }) {
             ctx.strokeText(String(i), 4, y + 4); ctx.fillText(String(i), 4, y + 4);
         }
 
-        // الدائرتان الحاليتان: أحمر = الصافع، أزرق = المصفوع
         const c = loadCoords();
         [['slapper', '#ff2d55'], ['slapped', '#2d9bff']].forEach(([key, col]) => {
             const p = c[key];
@@ -153,51 +153,48 @@ async function adminSub(sub, rest, { api, event, helpers }) {
             ctx.strokeStyle = col; ctx.lineWidth = 6; ctx.stroke();
         });
 
-        const body = '📐 الأرقام 1–9 = أعشار العرض (أعلى) والارتفاع (يسار)\n'
-            + '🔴 الصافع (أنت)  🔵 المصفوع (المردود عليه)\n'
+        const body = '📐 الأرقام 1–9 = أعشار العرض والارتفاع\n'
+            + '🔴 الصافع (أنت)  🔵 المصفوع\n'
             + `الحالي: صافع ${f(c.slapper.xPct)} ${f(c.slapper.yPct)} ${f(c.slapper.rPct)} | مصفوع ${f(c.slapped.xPct)} ${f(c.slapped.yPct)} ${f(c.slapped.rPct)}\n`
-            + 'للتعديل: .صفع ضبط sx sy sr tx ty tr\nمثال: .صفع ضبط 0.7 0.3 0.12 0.3 0.3 0.12\n'
-            + 'وإن كانا معكوسين فقط اكتب: .صفع عكس';
+            + 'للتعديل: .صفع ضبط sx sy sr tx ty tr\n'
+            + 'وإن كانا معكوسين: .صفع عكس';
         return sendImage(api, event, body, canvas.toBuffer('image/png'));
     }
 
     if (sub === 'عكس' || sub === 'swap') {
         const c = loadCoords();
-        const swapped = { slapper: c.slapped, slapped: c.slapper };
-        saveCoords(swapped);
-        return reply('🔁 تم تبديل مكان الصورتين، جرّب .صفع بالرد على رسالة شخص');
+        saveCoords({ slapper: c.slapped, slapped: c.slapper });
+        return reply('🔁 تم تبديل مكان الصورتين');
     }
 
     if (sub === 'ضبط' || sub === 'set') {
         if (rest[0] === 'افتراضي') {
-            try { fs.unlinkSync(SAVED); } catch (e) { /* لا شيء محفوظ */ }
-            return reply('✅ رجعت الإحداثيات للافتراضي');
+            try { fs.unlinkSync(SAVED); } catch (e) {}
+            return reply('✅ رجعت الإحداثيات للافتراضي المصحح (الصافع يسار، المصفوع يمين)');
         }
         const n = rest.slice(0, 6).map(v => Number(normalizeDigits(v)));
         if (n.length < 6 || n.some(v => !Number.isFinite(v))) {
-            return reply('⚠️ اكتب 6 أرقام بين 0 و1:\n.صفع ضبط sx sy sr tx ty tr\nمثال: .صفع ضبط 0.7 0.3 0.12 0.3 0.3 0.12');
+            return reply('⚠️ اكتب 6 أرقام بين 0 و1:\n.صفع ضبط sx sy sr tx ty tr');
         }
         const coords = {
             slapper: { xPct: n[0], yPct: n[1], rPct: n[2] },
             slapped: { xPct: n[3], yPct: n[4], rPct: n[5] }
         };
-        if (!validCoords(coords)) return reply('⚠️ كل رقم لازم يكون أكبر من 0 وأصغر من 1');
+        if (!validCoords(coords)) return reply('⚠️ كل رقم لازم بين 0 و1');
         saveCoords(coords);
-        return reply('✅ تم حفظ الإحداثيات، جرّب .صفع بالرد على رسالة شخص');
+        return reply('✅ تم حفظ الإحداثيات');
     }
     return null;
 }
 
-// ═══════════════════════════════════════════════
-// 🚀 الأمر
-// ═══════════════════════════════════════════════
+/* ═══════════ الأمر الرئيسي ═══════════ */
 module.exports.run = async (ctx) => {
     const { api, event, args, helpers, cfg } = ctx;
     const reply = t => helpers.reply(api, event, t);
     const sender = String(event.senderID);
     const botId = String(api.getCurrentUserID());
 
-    // أوامر المطور (شبكة / ضبط / عكس)
+    // أوامر المطور
     const sub = args && args[0];
     if (sub && ['شبكة', 'grid', 'ضبط', 'set', 'عكس', 'swap'].includes(sub)) {
         if (!(cfg && cfg.isAdmin && cfg.isAdmin(sender))) {
@@ -213,7 +210,7 @@ module.exports.run = async (ctx) => {
     }
 
     // ═══════════════════════════════════════════════
-    // 1. المصفوع = من تم الرد على رسالته (أو المنشن)، والصافع = صاحب الأمر
+    // 1. الصافع = صاحب الأمر، المصفوع = المردود عليه/المنشن
     // ═══════════════════════════════════════════════
     let target = null;
     if (event.messageReply) {
@@ -268,7 +265,7 @@ module.exports.run = async (ctx) => {
         if (!bufTemplate) throw new Error('تعذر تحميل القالب');
 
         // ═══════════════════════════════════════════════
-        // 4. الرسم على القالب
+        // 4. الرسم: الصافع ← slapper (يسار)، المصفوع ← slapped (يمين)
         // ═══════════════════════════════════════════════
         const templateImg = await loadImage(bufTemplate);
         const canvas = createCanvas(templateImg.width, templateImg.height);
@@ -281,9 +278,9 @@ module.exports.run = async (ctx) => {
         const imgSlapper = bufSlapper ? await loadImage(bufSlapper) : null;
         const imgSlapped = bufSlapped ? await loadImage(bufSlapped) : null;
 
-        // الصافع (صاحب الأمر) ← موضع slapper
+        // ✅ صاحب الأمر يظهر كـ صافع
         drawCircleImage(ctx2d, imgSlapper, W * C.slapper.xPct, H * C.slapper.yPct, W * C.slapper.rPct);
-        // المصفوع (المردود عليه) ← موضع slapped
+        // ✅ المردود عليه يظهر كـ مصفوع
         drawCircleImage(ctx2d, imgSlapped, W * C.slapped.xPct, H * C.slapped.yPct, W * C.slapped.rPct);
 
         // ═══════════════════════════════════════════════
@@ -292,7 +289,6 @@ module.exports.run = async (ctx) => {
         await sendImage(api, event, body, canvas.toBuffer('image/png'), mentions);
     } catch (error) {
         console.error('[صفع] خطأ:', error && error.message);
-        // في حال فشل كل شيء، نرسل النص فقط
         return reply({ body, mentions });
     }
 };
