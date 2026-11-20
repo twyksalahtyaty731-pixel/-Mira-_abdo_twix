@@ -24,23 +24,19 @@ module.exports.config = {
     adminOnly: false
 };
 
-/* ═══════════════════════════════════════════════
-   🖼️ ضع رابط الصورة هنا (القالب)
-   ═══════════════════════════════════════════════ */
 const TEMPLATE_URL = 'https://i.ibb.co/4ZFh5GLn/8bcf213c710e8a812072920693e131ea.webp'; 
 
-const LAYOUT_VERSION = 4;
+const LAYOUT_VERSION = 5;
 const DEFAULT_COORDS = {
-    // إحداثيات مضبوطة بناءً على صورتك: x و y هما المركز، rPct هو نصف حجم المربع
-    avatar: { xPct: 0.755, yPct: 0.467, rPct: 0.085 }, 
-    // إحداثيات الاسم: x و y هما المركز، sizePct هو حجم الخط
-    name:   { xPct: 0.420, yPct: 0.467, sizePct: 0.048 }
+    // الصورة: x (يمين/يسار) - y (فوق/تحت) - rPct (نصف الحجم)
+    avatar: { xPct: 0.735, yPct: 0.445, rPct: 0.075 }, 
+    // الاسم: x (يمين/يسار) - y (فوق/تحت) - sizePct (حجم الخط)
+    name:   { xPct: 0.400, yPct: 0.445, sizePct: 0.050 }
 };
 
 const SAVED = path.join(__dirname, '..', '..', 'Heba_DB', 'hack_layout.json');
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-/* ═══════════ تحميل الخط العربي تلقائياً (حل مشكلة المربعات) ═══════════ */
 const FONT_URL = 'https://github.com/google/fonts/raw/main/ofl/tajawal/Tajawal-Bold.ttf';
 const FONT_PATH = path.join(__dirname, '..', '..', 'Heba_DB', 'Tajawal-Bold.ttf');
 
@@ -49,19 +45,14 @@ async function ensureFont() {
     try {
         if (!fs.existsSync(FONT_PATH)) {
             fs.ensureDirSync(path.dirname(FONT_PATH));
-            console.log('[اختراق] 📥 جاري تحميل الخط العربي...');
             const res = await axios.get(FONT_URL, { responseType: 'arraybuffer', timeout: 15000 });
             fs.writeFileSync(FONT_PATH, Buffer.from(res.data));
         }
         GlobalFonts.registerFromPath(FONT_PATH, 'ArabicFont');
-        console.log('[اختراق] ✅ الخط العربي جاهز');
-    } catch (e) {
-        console.log('[اختراق] ⚠️ فشل تحميل الخط:', e.message);
-    }
+    } catch (e) { console.log('[اختراق] ⚠️ فشل تحميل الخط:', e.message); }
 }
 ensureFont();
 
-/* ═══════════ دوال مساعدة ═══════════ */
 function withTimeout(promise, ms, fallback = null) {
     return Promise.race([promise, new Promise(r => setTimeout(() => r(fallback), ms))]);
 }
@@ -107,7 +98,6 @@ const normalizeDigits = s => String(s || '')
     .replace(/[۰-۹]/g, d => '۰۱۲۳۴۵۶۷۸۹'.indexOf(d))
     .replace(/٫/g, '.');
 
-/* ═══════════ الإحداثيات ═══════════ */
 const validAvatar = p => p && [p.xPct, p.yPct, p.rPct].every(v => typeof v === 'number' && v > 0 && v < 1);
 const validName = p => p && [p.xPct, p.yPct, p.sizePct].every(v => typeof v === 'number' && v > 0 && v < 1);
 const validCoords = c => c && validAvatar(c.avatar) && validName(c.name);
@@ -131,7 +121,6 @@ function saveCoords(c) {
     fs.writeFileSync(SAVED, JSON.stringify({ version: LAYOUT_VERSION, coords: c }, null, 2));
 }
 
-/* ═══════════ تحميل الموارد ═══════════ */
 let templateCache = null;
 
 async function fetchBuffer(url, timeout = 12000) {
@@ -144,10 +133,7 @@ async function fetchBuffer(url, timeout = 12000) {
             headers: { 'User-Agent': 'Mozilla/5.0', 'Referer': 'https://ibb.co/' }
         });
         return Buffer.from(res.data);
-    } catch (e) {
-        console.log('[اختراق] fetchBuffer فشل:', url.slice(0, 60), '->', e.message);
-        return null;
-    }
+    } catch (e) { return null; }
 }
 
 async function getTemplate() {
@@ -157,15 +143,15 @@ async function getTemplate() {
     return buf;
 }
 
-/* ═══════════ الرسم ═══════════ */
+// 🧹 رسم الصورة (مع مسح القديمة بقوة)
 function drawSquareImage(ctx, img, cx, cy, size) {
     if (!img) return;
     const x = cx - size / 2;
     const y = cy - size / 2;
 
-    // 🧹 مسح الصورة القديمة (مستطيل أبيض أكبر قليلاً لضمان التغطية)
+    // مسح منطقة أوسع قليلاً (لتغطية حواف الصورة القديمة)
     ctx.fillStyle = '#FFFFFF';
-    ctx.fillRect(x - 2, y - 2, size + 4, size + 4);
+    ctx.fillRect(x - 5, y - 5, size + 10, size + 10);
 
     ctx.save();
     const scale = Math.max(size / img.width, size / img.height);
@@ -179,19 +165,19 @@ function drawSquareImage(ctx, img, cx, cy, size) {
     ctx.restore();
 }
 
+// 🧹 رسم الاسم (مع مسح القديم)
 function drawName(ctx, text, x, y, sizePct, width) {
     const fontSize = Math.max(14, Math.round(width * sizePct));
     
-    // 🧹 مسح الاسم القديم
+    // مسح النص القديم بمستطيل أبيض
     ctx.fillStyle = '#FFFFFF';
-    ctx.fillRect(width * 0.05, y - fontSize * 1.5, width * 0.65, fontSize * 3);
+    ctx.fillRect(width * 0.10, y - fontSize * 1.2, width * 0.50, fontSize * 2.4);
 
     ctx.save();
-    // استخدام الخط العربي المجهز
     ctx.font = `bold ${fontSize}px 'ArabicFont', sans-serif`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillStyle = '#1877F2'; // لون فيسبوك الأزرق
+    ctx.fillStyle = '#1877F2'; // لون فيسبوك
     
     const isArabic = /[\u0600-\u06FF]/.test(text);
     try { ctx.direction = isArabic ? 'rtl' : 'ltr'; } catch (e) {}
@@ -201,10 +187,9 @@ function drawName(ctx, text, x, y, sizePct, width) {
     ctx.restore();
 }
 
-/* ═══════════ تركيب الصورة ═══════════ */
 async function composeHackImage({ api, targetUid, targetName }) {
     if (!canvasOK) return null;
-    await ensureFont(); // تأكد من تحميل الخط
+    await ensureFont();
 
     const tplBuf = await withTimeout(getTemplate(), 10000, null);
     if (!tplBuf) return null;
@@ -224,7 +209,7 @@ async function composeHackImage({ api, targetUid, targetName }) {
             avatarBuf = await fetchBuffer(url, 8000);
             if (avatarBuf && avatarBuf.length > 500) break;
         }
-    } catch (e) { console.log('[اختراق] avatar فشل:', e.message); }
+    } catch (e) {}
 
     try {
         const templateImg = await loadImage(tplBuf);
@@ -235,78 +220,50 @@ async function composeHackImage({ api, targetUid, targetName }) {
         const C = loadCoords();
         const W = templateImg.width, H = templateImg.height;
 
-        // 1. رسم الصورة (تمسح القديمة)
+        // 1. رسم الصورة الجديدة
         if (avatarBuf) {
             const avatarImg = await loadImage(avatarBuf);
             const size = W * C.avatar.rPct * 2; 
             drawSquareImage(ctx, avatarImg, W * C.avatar.xPct, H * C.avatar.yPct, size);
         }
 
-        // 2. مسح وكتابة الاسم (يمسح القديم)
+        // 2. مسح وكتابة الاسم الجديد
         if (targetName) {
             drawName(ctx, targetName, W * C.name.xPct, H * C.name.yPct, C.name.sizePct, W);
         }
 
         return canvas.toBuffer('image/png');
-    } catch (e) {
-        console.error('[اختراق] خطأ في التركيب:', e.message);
-        return null;
-    }
+    } catch (e) { return null; }
 }
 
-/* ═══════════ إرسال الصورة فقط ═══════════ */
 async function sendImageOnly(api, event, bufferOrUrl) {
     let buf = bufferOrUrl;
-    if (typeof bufferOrUrl === 'string') {
-        buf = await fetchBuffer(bufferOrUrl);
-    }
+    if (typeof bufferOrUrl === 'string') buf = await fetchBuffer(bufferOrUrl);
     if (!buf) return;
 
-    const file = path.join(os.tmpdir(), `hack_${Date.now()}_${Math.floor(Math.random() * 1e6)}.png`);
+    const file = path.join(os.tmpdir(), `hack_${Date.now()}.png`);
     fs.writeFileSync(file, buf);
     try {
         await new Promise(resolve => {
-            api.sendMessage(
-                { attachment: fs.createReadStream(file) }, // بدون body
-                event.threadID,
-                () => resolve(),
-                event.messageID
-            );
+            api.sendMessage({ attachment: fs.createReadStream(file) }, event.threadID, () => resolve(), event.messageID);
         });
-    } finally {
-        fs.unlink(file, () => {});
-    }
+    } finally { fs.unlink(file, () => {}); }
 }
 
-/* ═══════════ التقرير ═══════════ */
 function buildReport(name, uid) {
     return [
-        '●───── ✾ ─────●',
-        '┇',
-        '┇ ⦿ ⟬ تـقـريـر الأمـان ⟭',
-        '┇',
-        `┇ 𓋰 الـمـسـتـخـدم : ${name}`,
-        `┇ 𓋰 الآيـــــدي : ${uid}`,
-        '┇',
-        '┝━━━━━━━━━━━━━━━',
-        '┇',
-        '┇ 𓋰 مـسـتـوى الـحـمـايـة : 🟡 متوسط',
-        '┇ 𓋰 نـقـاط الأمــان : 84/100',
-        '┇ 𓋰 الـمـصـادقـة 2FA : مفعّلة ✅',
-        '┇ 𓋰 الأجـهـزة : 5 أجهزة',
-        '┇ 𓋰 آخـر دخــول : منذ يوم',
-        '┇ 𓋰 نـشـاط مـشـبوه : محاولة تسجيل غريبة ⚠',
-        '┇ 𓋰 تـسـريـبات : تم رصد تسريب محتمل 🚨',
-        '┇',
-        '┝━━━━━━━━━━━━━━━',
-        '┇',
-        '┇ 𓋰 الـتـوصـيـة : يُنصح بتفعيل 2FA لحماية أفضل.',
-        '┇',
-        '●───── ✾ ─────●'
+        '●───── ✾ ─────●', '┇', '┇ ⦿ ⟬ تـقـريـر الأمـان ⟭', '┇',
+        `┇ 𓋰 الـمـسـتـخـدم : ${name}`, `┇ 𓋰 الآيـــــدي : ${uid}`, '┇',
+        '┝━━━━━━━━━━━━━━━', '┇',
+        '┇ 𓋰 مـسـتـوى الـحـمـايـة : 🟡 متوسط', '┇ 𓋰 نـقـاط الأمــان : 84/100',
+        '┇ 𓋰 الـمـصـادقـة 2FA : مفعّلة ✅', '┇ 𓋰 الأجـهـزة : 5 أجهزة',
+        '┇ 𓋰 آخـر دخــول : منذ يوم', '┇ 𓋰 نـشـاط مـشـبوه : محاولة تسجيل غريبة ⚠',
+        '┇ 𓋰 تـسـريـبات : تم رصد تسريب محتمل 🚨', '┇',
+        '┝━━━━━━━━━━━━━━━', '┇',
+        '┇ 𓋰 الـتـوصـيـة : يُنصح بتفعيل 2FA لحماية أفضل.', '┇', '●───── ✾ ─────●'
     ].join('\n');
 }
 
-/* ═══════════ أوامر الضبط ═══════════ */
 async function adminSub(sub, rest, { api, event, helpers }) {
     const reply = t => helpers.reply(api, event, t);
     const f = n => Number(n).toFixed(3);
@@ -361,7 +318,7 @@ async function adminSub(sub, rest, { api, event, helpers }) {
         if (kind === 'صورة') {
             const n = rest.slice(1, 4).map(v => Number(normalizeDigits(v)));
             if (n.length < 3 || n.some(v => !Number.isFinite(v) || v <= 0 || v >= 1)) {
-                return reply('⚠️ مثال: .اختراق ضبط صورة 0.755 0.467 0.085');
+                return reply('⚠️ مثال: .اختراق ضبط صورة 0.735 0.445 0.075');
             }
             const c = loadCoords();
             c.avatar = { xPct: n[0], yPct: n[1], rPct: n[2] };
@@ -372,7 +329,7 @@ async function adminSub(sub, rest, { api, event, helpers }) {
         if (kind === 'اسم') {
             const n = rest.slice(1, 4).map(v => Number(normalizeDigits(v)));
             if (n.length < 3 || n.some(v => !Number.isFinite(v) || v <= 0 || v >= 1)) {
-                return reply('⚠️ مثال: .اختراق ضبط اسم 0.42 0.467 0.048');
+                return reply('⚠️ مثال: .اختراق ضبط اسم 0.40 0.445 0.050');
             }
             const c = loadCoords();
             c.name = { xPct: n[0], yPct: n[1], sizePct: n[2] };
@@ -385,7 +342,6 @@ async function adminSub(sub, rest, { api, event, helpers }) {
     return null;
 }
 
-/* ═══════════ الأمر الرئيسي ═══════════ */
 module.exports.run = async ({ api, event, args, helpers, cfg }) => {
     const sender = String(event.senderID);
     const reply = t => helpers.reply(api, event, t);
@@ -439,7 +395,5 @@ module.exports.run = async ({ api, event, args, helpers, cfg }) => {
         } else {
             await sendImageOnly(api, event, TEMPLATE_URL);
         }
-    } catch (e) {
-        console.error('[اختراق] فشل إرسال الصورة:', e.message);
-    }
+    } catch (e) {}
 };
