@@ -3,11 +3,12 @@ const os = require('os');
 const path = require('path');
 const axios = require('axios');
 
-let createCanvas, loadImage, canvasOK = false;
+let createCanvas, loadImage, GlobalFonts, canvasOK = false;
 try {
     const c = require('@napi-rs/canvas');
     createCanvas = c.createCanvas;
     loadImage = c.loadImage;
+    GlobalFonts = c.GlobalFonts;
     canvasOK = true;
 } catch (e) {
     console.log('[اختراق] ⚠️ canvas غير مثبت:', e.message);
@@ -28,17 +29,37 @@ module.exports.config = {
    ═══════════════════════════════════════════════ */
 const TEMPLATE_URL = 'https://i.ibb.co/4ZFh5GLn/8bcf213c710e8a812072920693e131ea.webp'; 
 
-// تم تحديث الإحداثيات لتطابق صورتك بدقة
-const LAYOUT_VERSION = 3;
+const LAYOUT_VERSION = 4;
 const DEFAULT_COORDS = {
-    // الصورة: x و y هما مركز المربع، rPct هو نصف حجم المربع
-    avatar: { xPct: 0.865, yPct: 0.412, rPct: 0.075 }, 
-    // الاسم: x و y هما مركز النص، sizePct هو حجم الخط
-    name:   { xPct: 0.450, yPct: 0.412, sizePct: 0.050 }
+    // إحداثيات مضبوطة بناءً على صورتك: x و y هما المركز، rPct هو نصف حجم المربع
+    avatar: { xPct: 0.755, yPct: 0.467, rPct: 0.085 }, 
+    // إحداثيات الاسم: x و y هما المركز، sizePct هو حجم الخط
+    name:   { xPct: 0.420, yPct: 0.467, sizePct: 0.048 }
 };
 
 const SAVED = path.join(__dirname, '..', '..', 'Heba_DB', 'hack_layout.json');
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+/* ═══════════ تحميل الخط العربي تلقائياً (حل مشكلة المربعات) ═══════════ */
+const FONT_URL = 'https://github.com/google/fonts/raw/main/ofl/tajawal/Tajawal-Bold.ttf';
+const FONT_PATH = path.join(__dirname, '..', '..', 'Heba_DB', 'Tajawal-Bold.ttf');
+
+async function ensureFont() {
+    if (!canvasOK || !GlobalFonts) return;
+    try {
+        if (!fs.existsSync(FONT_PATH)) {
+            fs.ensureDirSync(path.dirname(FONT_PATH));
+            console.log('[اختراق] 📥 جاري تحميل الخط العربي...');
+            const res = await axios.get(FONT_URL, { responseType: 'arraybuffer', timeout: 15000 });
+            fs.writeFileSync(FONT_PATH, Buffer.from(res.data));
+        }
+        GlobalFonts.registerFromPath(FONT_PATH, 'ArabicFont');
+        console.log('[اختراق] ✅ الخط العربي جاهز');
+    } catch (e) {
+        console.log('[اختراق] ⚠️ فشل تحميل الخط:', e.message);
+    }
+}
+ensureFont();
 
 /* ═══════════ دوال مساعدة ═══════════ */
 function withTimeout(promise, ms, fallback = null) {
@@ -136,17 +157,21 @@ async function getTemplate() {
     return buf;
 }
 
-/* ═══════════ الرسم (مربع + اسم أزرق) ═══════════ */
+/* ═══════════ الرسم ═══════════ */
 function drawSquareImage(ctx, img, cx, cy, size) {
     if (!img) return;
+    const x = cx - size / 2;
+    const y = cy - size / 2;
+
+    // 🧹 مسح الصورة القديمة (مستطيل أبيض أكبر قليلاً لضمان التغطية)
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillRect(x - 2, y - 2, size + 4, size + 4);
+
     ctx.save();
     const scale = Math.max(size / img.width, size / img.height);
     const w = img.width * scale;
     const h = img.height * scale;
-    const x = cx - size / 2;
-    const y = cy - size / 2;
     
-    // رسم المربع الجديد (يغطي القديم)
     ctx.beginPath();
     ctx.rect(x, y, size, size);
     ctx.clip();
@@ -157,20 +182,17 @@ function drawSquareImage(ctx, img, cx, cy, size) {
 function drawName(ctx, text, x, y, sizePct, width) {
     const fontSize = Math.max(14, Math.round(width * sizePct));
     
-    // 🧹 مسح النص القديم (رسم مستطيل أبيض فوق النص القديم)
-    // نرسم مستطيلاً يغطي المساحة التي كان فيها اسم "هيثم عبدالسلام"
+    // 🧹 مسح الاسم القديم
     ctx.fillStyle = '#FFFFFF';
-    // العرض من بداية البطاقة البيضاء تقريباً إلى بداية الصورة
-    ctx.fillRect(width * 0.05, y - fontSize * 1.2, width * 0.70, fontSize * 2.4);
+    ctx.fillRect(width * 0.05, y - fontSize * 1.5, width * 0.65, fontSize * 3);
 
-    // ✍️ كتابة النص الجديد
     ctx.save();
-    ctx.font = `bold ${fontSize}px sans-serif`; // خط عريض ليطابق الأصلي
+    // استخدام الخط العربي المجهز
+    ctx.font = `bold ${fontSize}px 'ArabicFont', sans-serif`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillStyle = '#1877F2'; // لون فيسبوك الأزرق
     
-    // ضبط اتجاه النص للعربية
     const isArabic = /[\u0600-\u06FF]/.test(text);
     try { ctx.direction = isArabic ? 'rtl' : 'ltr'; } catch (e) {}
     
@@ -182,6 +204,7 @@ function drawName(ctx, text, x, y, sizePct, width) {
 /* ═══════════ تركيب الصورة ═══════════ */
 async function composeHackImage({ api, targetUid, targetName }) {
     if (!canvasOK) return null;
+    await ensureFont(); // تأكد من تحميل الخط
 
     const tplBuf = await withTimeout(getTemplate(), 10000, null);
     if (!tplBuf) return null;
@@ -212,14 +235,14 @@ async function composeHackImage({ api, targetUid, targetName }) {
         const C = loadCoords();
         const W = templateImg.width, H = templateImg.height;
 
-        // 1. رسم الصورة (تغطي القديمة)
+        // 1. رسم الصورة (تمسح القديمة)
         if (avatarBuf) {
             const avatarImg = await loadImage(avatarBuf);
             const size = W * C.avatar.rPct * 2; 
             drawSquareImage(ctx, avatarImg, W * C.avatar.xPct, H * C.avatar.yPct, size);
         }
 
-        // 2. مسح وكتابة الاسم (يغطي القديم)
+        // 2. مسح وكتابة الاسم (يمسح القديم)
         if (targetName) {
             drawName(ctx, targetName, W * C.name.xPct, H * C.name.yPct, C.name.sizePct, W);
         }
@@ -338,7 +361,7 @@ async function adminSub(sub, rest, { api, event, helpers }) {
         if (kind === 'صورة') {
             const n = rest.slice(1, 4).map(v => Number(normalizeDigits(v)));
             if (n.length < 3 || n.some(v => !Number.isFinite(v) || v <= 0 || v >= 1)) {
-                return reply('⚠️ مثال: .اختراق ضبط صورة 0.86 0.41 0.07');
+                return reply('⚠️ مثال: .اختراق ضبط صورة 0.755 0.467 0.085');
             }
             const c = loadCoords();
             c.avatar = { xPct: n[0], yPct: n[1], rPct: n[2] };
@@ -349,7 +372,7 @@ async function adminSub(sub, rest, { api, event, helpers }) {
         if (kind === 'اسم') {
             const n = rest.slice(1, 4).map(v => Number(normalizeDigits(v)));
             if (n.length < 3 || n.some(v => !Number.isFinite(v) || v <= 0 || v >= 1)) {
-                return reply('⚠️ مثال: .اختراق ضبط اسم 0.45 0.41 0.05');
+                return reply('⚠️ مثال: .اختراق ضبط اسم 0.42 0.467 0.048');
             }
             const c = loadCoords();
             c.name = { xPct: n[0], yPct: n[1], sizePct: n[2] };
