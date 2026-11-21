@@ -1,7 +1,7 @@
 module.exports.config = {
     name: 'تعذيب',
     aliases: ['torture', 'kickloop'],
-    description: 'طرد وإضافة الشخص عدة مرات ثم طرده نهائياً (للمطور فقط)',
+    description: 'طرد وإضافة الشخص 7 مرات ثم طرده نهائياً (للمطور فقط)',
     usage: 'تعذيب [@شخص | رد على رسالة]',
     category: 'admin',
     cooldown: 60,
@@ -66,36 +66,41 @@ module.exports.run = async ({ api, event, args, helpers, cfg }) => {
     }
 
     // ═══════════════════════════════════════════════
-    // 5. بدء عملية التعذيب
+    // 5. بدء عملية التعذيب (7 مرات)
     // ═══════════════════════════════════════════════
-    const loops = 3; // عدد مرات الطرد والإضافة (يمكن للمطور زيادتها)
-    await reply(`🔥 بدء عملية تعذيب: ${targetName}\n⏳ سيتم طرده وإضافته ${loops} مرات...`);
+    const loops = 7; 
+    let success = true;
+
+    await reply(`🔥 بدء عملية تعذيب: ${targetName}\n⏳ سيتم طرده وإضافته ${loops} مرات بكل قوة...`);
 
     for (let i = 1; i <= loops; i++) {
         try {
             // أ) الطرد
             await apiCall(api, 'removeUserFromGroup', targetID, threadID);
-            await sleep(1500); // الانتظار لتجنب حظر فيسبوك
+            await sleep(1200); // الانتظار لتجنب حظر فيسبوك
 
             // ب) الإضافة مرة أخرى
             await apiCall(api, 'addUserToGroup', targetID, threadID);
-            await sleep(1500);
+            await sleep(1200);
             
             console.log(`[تعذيب] تم طرد وإضافة ${targetName} (مرة ${i}/${loops})`);
             
         } catch (e) {
-            console.error(`[تعذيب] خطأ في الجولة ${i}:`, e.message);
-            await reply(`⚠️ حدث خطأ أثناء الجولة ${i}. قد يكون الهدف أغلق خاصية الإضافة أو قام بحظر البوت.`);
-            break; // نوقف التعذيب إذا حدث خطأ
+            // فشلت الإضافة (غالباً بسبب الخصوصية أو الحظر)
+            console.error(`[تعذيب] فشل في الجولة ${i}:`, e.message);
+            success = false;
+            return reply(`❌ فشل التعذيب في الجولة ${i}!\n👤 المستخدم ${targetName} قافل إعدادات الخصوصية (لا يسمح بالإضافة) أو قام بحظر البوت.`);
         }
     }
 
-    // 6. الطرد النهائي
-    try {
-        await sleep(1000);
-        await apiCall(api, 'removeUserFromGroup', targetID, threadID);
-        return reply(`✅ تم الانتهاء!\n👋 ${targetName} تم طرده نهائياً بعد التعذيب.\n🔄 عدد المحاولات: ${loops}`);
-    } catch (e) {
-        return reply(`⚠️ فشل الطرد النهائي: ${e.message}`);
+    // 6. الطرد النهائي (إذا نجحت كل المحاولات)
+    if (success) {
+        try {
+            await sleep(1000);
+            await apiCall(api, 'removeUserFromGroup', targetID, threadID);
+            return reply(`✅ تم التعذيب بنجاح!\n👋 تم طرد ${targetName} وإضافته ${loops} مرات متتالية، وتم طرده نهائياً في النهاية.`);
+        } catch (e) {
+            return reply(`⚠️ نجحت المحاولات السبع، لكن فشل الطرد النهائي: ${e.message}`);
+        }
     }
 };
