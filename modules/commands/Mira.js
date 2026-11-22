@@ -10,7 +10,7 @@ const MAX_STICKERS = 50;
 
 fs.ensureDirSync(STICKERS_DIR);
 
-/* ═══════════ تخزين الملصقات في الذاكرة (لتسريع الاستجابة) ═══════════ */
+/* ═══════════ تخزين الملصقات ═══════════ */
 let cachedStickers = null;
 
 function loadStickers() {
@@ -37,7 +37,7 @@ function saveGenders(m) {
 }
 
 /* ═══════════ كشف الجنس ═══════════ */
-const MALE_NAMES = ['محمد','أحمد','احمد','علي','حسن','حسين','عمر','خالد','يوسف','إبراهيم','ابراهيم','محمود','سيد','مصطفى','عبدالله','عبد الله','يحيى','سامي','كريم','مراد','معاذ','عماد','طارق','زياد','رامي','سيف','أيمن','ايمن','حمدي','مروان','نادر','سامر','بشار','بسام','تامر','جمال','حاتم','حازم','حسام','رشيد','رضا','رمزي','سعد','سعيد','سليم','شادي','صالح','صلاح','عادل','عاصم','عاطف','عصام','علاء','فادي','فارس','فؤاد','قصي','كمال','لؤي','ماجد','مالك','مجدي','ناجي','نبيل','نزار','نعيم','هاني','هشام','وسام','وليد','ياسر','زيد','جون','جاك','جيمس','مايكل','ديفيد','روبرت','بيتر','بول','مارك','دانيال','توم','أمير','امير','فيصل','تركي','بندر','فهد','سلطان','سلمان','مشعل','نواف','عبدالعزيز','عبدالرحمن','أنس','انس'];
+const MALE_NAMES = ['محمد','أحمد','احمد','علي','حسن','حسين','عمر','خالد','يوسف','إبراهيم','ابراهيم','محمود','سيد','مصطفى','عبدالله','عبد الله','يحيى','سامي','كريم','مراد','معاذ','عماد','طارق','زياد','رامي','سيف','أيمن','ايمن','حمدي','مروان','نادر','سامر','بشار','بسام','تامر','جمال','حاتم','حازم','حسام','رشيد','رضا','رمزي','سعد','سعيد','سليم','شادي','صالح','صلاح','عادل','عاصم','عاطف','عصام','علاء','فادي','فارس','فؤاد','قصي','كمال','لؤي','ماجد','مالك','مجدي','ناجي','نبيل','نزار','نعيم','هاني','هشام','وسام','وليد','ياسر','زيد','جون','جاك','جيمس','مايكل','ديفيد','روبرت','بيتر','بول','مارك','دانيال','توم','أمير','امير','فيصل','تركي','بندر','فهد','سلطان','سلمان','مشعل','نواف','عبدالعزيز','عبدالرحمن','أنس','انس','تويكس'];
 const FEMALE_NAMES = ['فاطمة','فاطمه','عائشة','عايشة','خديجة','خديجه','مريم','زينب','رقية','رقيه','سارة','ساره','نور','نورة','نوره','هند','هدى','هدي','سمية','سميه','أمينة','امينة','سلمى','سلمي','ليلى','ليلي','دينا','دانية','دانيا','رنا','ريم','ريما','شهد','غادة','غاده','لينا','لمى','لما','منى','مني','ميرا','مي','نادية','ناديه','نجوى','نسرين','نوال','هبة','هبه','هدير','وئام','وداد','ياسمين','يسرا','أسماء','اسماء','آلاء','الاء','أمل','امل','إيمان','ايمان','بسمة','بسمه','تسنيم','تغريد','جميلة','جميله','حنان','حياة','حياه','خلود','رانية','رانيا','رباب','رحمة','رحمه','رغد','رفيف','روان','زهرة','زهره','سجى','سجي','سناء','سنا','سهى','سهام','شيماء','صفاء','صفا','عبير','علا','علياء','غدير','فرح','فردوس','فدوى','فدوي','لبنى','لبني','لطيفة','لمياء','لورا','ليان','مروة','مروه','ملاك','منال','ميساء','نهى','نهي','هيا','هيفاء','وجدان','وفاء','جين','ماري','إيميلي','أوليفيا','إيما','صوفيا','كلوي','شارلوت','أميليا','ميا','إيلا','زوي','ليلي','إيفي','مايا','أميرة','اميرة'];
 
 function guessGender({ name = '', nickname = '', apiGender = '', saved }) {
@@ -65,27 +65,31 @@ function addr(g) {
 
 /* ═══════════ حفظ ملصق ═══════════ */
 async function saveSticker(api, event, att) {
-    const url = att.url;
-    if (!url) return { ok: false, msg: '⚠️ لا يوجد رابط للملصق' };
-
     const list = loadStickers();
     if (list.length >= MAX_STICKERS) return { ok: false, msg: `⚠️ الحد الأقصى ${MAX_STICKERS} ملصق` };
 
-    // 🛠️ الإصلاح: إجبار الامتداد ليكون ملصق وليس صورة
-    let ext = 'webp';
-    if (att.type === 'animated_image' || (att.url && att.url.includes('.gif'))) {
-        ext = 'gif'; // ملصقات متحركة
-    } else if (att.type === 'photo' && !att.url.includes('.webp')) {
-        ext = 'jpg'; // صورة عادية
+    // 1. إذا كان ملصق كيبورد أصلي (يحتوي على ID)
+    if (att.stickerID) {
+        list.push({ type: 'id', id: att.stickerID, addedAt: Date.now(), by: String(event.senderID) });
+        saveStickers(list);
+        return { ok: true, msg: `✅ تم حفظ ملصق الكيبورد (المجموع: ${list.length}/${MAX_STICKERS})` };
     }
+
+    // 2. إذا كان صورة/ملصق مرسل كملف
+    const url = att.url;
+    if (!url) return { ok: false, msg: '⚠️ لا يوجد رابط للملصق أو معرف' };
+
+    let ext = 'webp';
+    if (att.type === 'animated_image' || url.includes('.gif')) ext = 'gif';
+    else if (att.type === 'photo') ext = 'jpg';
 
     const filename = `mira_${Date.now()}_${Math.floor(Math.random() * 999)}.${ext}`;
     const filePath = path.join(STICKERS_DIR, filename);
 
     try {
-        const res = await axios.get(url, { responseType: 'arraybuffer', timeout: 15000, maxContentLength: 5 * 1024 * 1024 });
+        const res = await axios.get(url, { responseType: 'arraybuffer', timeout: 15000 });
         fs.writeFileSync(filePath, Buffer.from(res.data));
-        list.push({ file: filename, addedAt: Date.now(), by: String(event.senderID) });
+        list.push({ type: 'file', file: filename, addedAt: Date.now(), by: String(event.senderID) });
         saveStickers(list);
         return { ok: true, msg: `✅ تم حفظ الملصق (المجموع: ${list.length}/${MAX_STICKERS})` };
     } catch (e) {
@@ -93,33 +97,37 @@ async function saveSticker(api, event, att) {
     }
 }
 
-/* ═══════════ تفاعل ميرا (ملصق + 💟) ═══════════ */
+/* ═══════════ تفاعل ميرا ═══════════ */
 async function triggerMira(api, event) {
+    // التفاعل أولاً لضمان ظهوره حتى لو فشل إرسال الملصق
+    try { 
+        api.setMessageReaction('💟', event.messageID, (err) => {
+            if(err) console.error('[ميرا] خطأ التفاعل:', err);
+        }, true); 
+    } catch(e) { console.error(e); }
+
     const list = loadStickers();
     if (!list.length) return;
 
     const pick = list[Math.floor(Math.random() * list.length)];
-    const filePath = path.join(STICKERS_DIR, pick.file);
-    if (!fs.existsSync(filePath)) return;
+    let msgPayload = {};
 
-    // 🛠️ الإصلاح: إرسال التفاعل والملصق في نفس الوقت لتسريع الاستجابة
-    const reactPromise = new Promise(res => {
-        try { api.setMessageReaction('💟', event.messageID, () => res(), true); } 
-        catch (e) { res(); }
-    });
+    try {
+        if (pick.type === 'id' && pick.id) {
+            // إرسال ستيكر الكيبورد
+            msgPayload = { sticker: pick.id };
+        } else if (pick.file) {
+            const filePath = path.join(STICKERS_DIR, pick.file);
+            if (!fs.existsSync(filePath)) return;
+            msgPayload = { attachment: fs.createReadStream(filePath) };
+        }
 
-    const stickerPromise = new Promise(res => {
-        try {
-            api.sendMessage(
-                { attachment: fs.createReadStream(filePath) }, 
-                event.threadID, 
-                () => res(), 
-                event.messageID // الرد على رسالة المستخدم
-            );
-        } catch (e) { res(); }
-    });
-
-    await Promise.all([reactPromise, stickerPromise]);
+        if (Object.keys(msgPayload).length > 0) {
+            api.sendMessage(msgPayload, event.threadID, (err) => {
+                if(err) console.error('[ميرا] خطأ إرسال الملصق:', err);
+            }, event.messageID);
+        }
+    } catch(e) { console.error(e); }
 }
 
 /* ═══════════ رد ذكي (Gemini API) ═══════════ */
@@ -127,12 +135,20 @@ async function aiReply({ api, event, helpers, text, cfg }) {
     const uid = String(event.senderID);
     let info = {};
     try { info = await new Promise(r => api.getUserInfo([uid], (e, d) => r(e ? {} : d || {}))); } catch (e) {}
+    
     const user = info[uid] || {};
-    const name = user.name || 'صديقي';
-    const savedGenders = loadGenders();
-    const gender = guessGender({ name, nickname: user.nickname || '', apiGender: user.gender || '', saved: savedGenders[uid] });
-    const A = addr(gender);
+    const isAdmin = !!(cfg && typeof cfg.isAdmin === 'function' && cfg.isAdmin(uid));
+    
+    let name = user.name || 'صديقي';
+    let gender = guessGender({ name, nickname: user.nickname || '', apiGender: user.gender || '', saved: loadGenders()[uid] });
+    
+    // تثبيت هوية المطور
+    if (isAdmin) {
+        name = 'تويكس';
+        gender = 'male';
+    }
 
+    const A = addr(gender);
     const cleanText = text.replace(/^\.?\s*ميرا\s*/i, '').trim();
     if (!cleanText) return null;
 
@@ -143,14 +159,17 @@ async function aiReply({ api, event, helpers, text, cfg }) {
     }
 
     const systemPrompt = `أنتِ "ميرا" — فتاة عربية ودودة وذكية وخفيفة الظل، تتحدثين العربية بأسلوب طبيعي مع لمسة عامية خفيفة.
-معلومات المتحدث:
+معلومات المتحدث الحالي:
 - الاسم: ${name}
 - الجنس: ${gender === 'female' ? 'أنثى — استخدمي صيغة المؤنث (أنتِ، عزيزتي، تفضلين)' : gender === 'male' ? 'ذكر — استخدمي صيغة المذكر (أنت، عزيزي، تفضل)' : 'غير محدد — استخدمي صيغة محايدة'}
+- هل هو المطور؟: ${isAdmin ? 'نعم، هذا هو المطور تويكس' : 'لا'}
+
 قواعد صارمة:
+- المطور الخاص بك هو "تويكس" (Twix)، وهو شاب/رجل. تعرفينه جيداً وتعتبرينه صديقك المقرب.
+- إذا سألك أحد عن تويكس أو المطور، قولي إنه صديقك تويكس.
 - أجب بإيجاز (سطر إلى 4 أسطر كحد أقصى).
 - لا تبدأي بمقدمات طويلة.
 - استخدمي إيموجي باعتدال (💟🩷✨).
-- إذا لم تعرفي إجابة، قوليها بوضوح واقترحي بديلاً.
 - لا تكسري الشخصية أبداً ولا تذكري أنك ذكاء اصطناعي.
 رسالة المستخدم: "${cleanText}"`;
 
@@ -180,10 +199,8 @@ module.exports.run = async ({ api, event, args, helpers, cfg }) => {
     if (sub === 'حفظ' || sub === 'احفظ') {
         if (!isAdmin) return helpers.reply(api, event, '⛔ الحفظ للمطور فقط');
         if (!event.messageReply || !event.messageReply.attachments) return helpers.reply(api, event, '⚠️ رد على ملصق واكتب .ميرا حفظ');
-        
-        const att = event.messageReply.attachments.find(a => ['sticker', 'photo', 'animated_image', 'video'].includes(a.type));
-        if (!att) return helpers.reply(api, event, '⚠️ لم أجد ملصقاً في الرسالة المردود عليها');
-        
+        const att = event.messageReply.attachments[0];
+        if (!att) return helpers.reply(api, event, '⚠️ لم أجد ملصقاً');
         const r = await saveSticker(api, event, att);
         return helpers.reply(api, event, r.msg);
     }
@@ -215,42 +232,47 @@ module.exports.run = async ({ api, event, args, helpers, cfg }) => {
 
 /* ═══════════ بدون بادئة (onMessage) ═══════════ */
 module.exports.onMessage = async ({ api, event, helpers, cfg }) => {
-    if (!event.body || !event.senderID) return false;
-    const text = String(event.body).trim();
-    const uid = String(event.senderID);
-    if (uid === String(api.getCurrentUserID())) return false;
+    try {
+        if (!event.body || !event.senderID) return false;
+        const text = String(event.body).trim();
+        const uid = String(event.senderID);
+        if (uid === String(api.getCurrentUserID())) return false;
 
-    const prefix = (cfg && cfg.PREFIX) || '.';
-    if (text.startsWith(prefix)) return false;
+        const prefix = (cfg && cfg.PREFIX) || '.';
+        if (text.startsWith(prefix)) return false;
 
-    const isAdmin = !!(cfg && typeof cfg.isAdmin === 'function' && cfg.isAdmin(uid));
+        const isAdmin = !!(cfg && typeof cfg.isAdmin === 'function' && cfg.isAdmin(uid));
 
-    // 1) المطور يرد على ملصق بكلمة "حفظ"
-    if (isAdmin && event.messageReply && event.messageReply.attachments) {
-        if (/^(حفظ|احفظ|خزن)$/i.test(text)) {
-            const att = event.messageReply.attachments.find(a => ['sticker', 'photo', 'animated_image', 'video'].includes(a.type));
-            if (att) {
-                const r = await saveSticker(api, event, att);
-                await helpers.reply(api, event, r.msg);
+        // 1) المطور يرد على ملصق بكلمة "حفظ"
+        if (isAdmin && event.messageReply && event.messageReply.attachments) {
+            if (/^(حفظ|احفظ|خزن)$/i.test(text)) {
+                const att = event.messageReply.attachments[0];
+                if (att) {
+                    const r = await saveSticker(api, event, att);
+                    await helpers.reply(api, event, r.msg);
+                    return true;
+                }
+            }
+        }
+
+        // 2) كلمة "ميرا" فقط → ملصق + 💟
+        if (/^ميرا\s*$/i.test(text)) {
+            await triggerMira(api, event);
+            return true;
+        }
+
+        // 3) "ميرا" + نص → رد ذكي
+        if (/^ميرا\s+\S/i.test(text)) {
+            const reply = await aiReply({ api, event, helpers, text, cfg });
+            if (reply) {
+                await helpers.reply(api, event, reply);
                 return true;
             }
         }
-    }
 
-    // 2) كلمة "ميرا" فقط → ملصق + 💟
-    if (/^ميرا\s*$/i.test(text)) {
-        await triggerMira(api, event);
-        return true;
+        return false;
+    } catch (err) {
+        console.error('[ميرا onMessage] خطأ:', err);
+        return false;
     }
-
-    // 3) "ميرا" + نص → رد ذكي
-    if (/^ميرا\s+\S/i.test(text)) {
-        const reply = await aiReply({ api, event, helpers, text, cfg });
-        if (reply) {
-            await helpers.reply(api, event, reply);
-            return true;
-        }
-    }
-
-    return false;
 };
