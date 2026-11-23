@@ -68,16 +68,15 @@ async function saveSticker(api, event, att) {
     const list = loadStickers();
     if (list.length >= MAX_STICKERS) return { ok: false, msg: `⚠️ الحد الأقصى ${MAX_STICKERS} ملصق` };
 
-    // 1. إذا كان ملصق كيبورد أصلي (يحتوي على ID)
-    if (att.stickerID) {
-        list.push({ type: 'id', id: att.stickerID, addedAt: Date.now(), by: String(event.senderID) });
+    if (att.stickerID || (att.type === 'sticker' && att.id)) {
+        const stickerId = att.stickerID || att.id;
+        list.push({ type: 'id', id: stickerId, addedAt: Date.now(), by: String(event.senderID) });
         saveStickers(list);
         return { ok: true, msg: `✅ تم حفظ ملصق الكيبورد (المجموع: ${list.length}/${MAX_STICKERS})` };
     }
 
-    // 2. إذا كان صورة/ملصق مرسل كملف
     const url = att.url;
-    if (!url) return { ok: false, msg: '⚠️ لا يوجد رابط للملصق أو معرف' };
+    if (!url) return { ok: false, msg: '⚠️ لا يوجد رابط للملصق' };
 
     let ext = 'webp';
     if (att.type === 'animated_image' || url.includes('.gif')) ext = 'gif';
@@ -97,40 +96,47 @@ async function saveSticker(api, event, att) {
     }
 }
 
-/* ═══════════ تفاعل ميرا ═══════════ */
+/* ═══════════ التفاعل وإرسال الملصق ═══════════ */
 async function triggerMira(api, event) {
-    // التفاعل أولاً لضمان ظهوره حتى لو فشل إرسال الملصق
+    // 1. وضع التفاعل (Reaction) على رسالة صاحب الأمر مباشرة
     try { 
-        api.setMessageReaction('💟', event.messageID, (err) => {
-            if(err) console.error('[ميرا] خطأ التفاعل:', err);
-        }, true); 
-    } catch(e) { console.error(e); }
+        if (typeof api.setMessageReaction === 'function') {
+            api.setMessageReaction('💟', event.messageID, (err) => {
+                if (err) console.log('[ميرا] خطأ في التفاعل:', err);
+            }, true); 
+        }
+    } catch(e) { 
+        console.log('[ميرا] فشل التفاعل:', e.message); 
+    }
 
+    // 2. إرسال الملصق كرسالة مستقلة (بدون Reply)
     const list = loadStickers();
     if (!list.length) return;
 
     const pick = list[Math.floor(Math.random() * list.length)];
-    let msgPayload = {};
+    let msgPayload = { body: '' }; // body فارغ لتجنب أخطاء بعض الإطارات
 
     try {
         if (pick.type === 'id' && pick.id) {
-            // إرسال ستيكر الكيبورد
-            msgPayload = { sticker: pick.id };
+            msgPayload.sticker = pick.id;
         } else if (pick.file) {
             const filePath = path.join(STICKERS_DIR, pick.file);
             if (!fs.existsSync(filePath)) return;
-            msgPayload = { attachment: fs.createReadStream(filePath) };
+            msgPayload.attachment = fs.createReadStream(filePath);
         }
 
-        if (Object.keys(msgPayload).length > 0) {
+        // إرسال الملصق بدون تمرير messageID (حتى لا يظهر "تم الرد عليك")
+        if (msgPayload.sticker || msgPayload.attachment) {
             api.sendMessage(msgPayload, event.threadID, (err) => {
-                if(err) console.error('[ميرا] خطأ إرسال الملصق:', err);
-            }, event.messageID);
+                if (err) console.log('[ميرا] خطأ إرسال الملصق:', err);
+            });
         }
-    } catch(e) { console.error(e); }
+    } catch(e) { 
+        console.log('[ميرا] خطأ:', e.message); 
+    }
 }
 
-/* ═══════════ رد ذكي (Gemini API) ═══════════ */
+/* ═══════════ رد ذكي ═══════════ */
 async function aiReply({ api, event, helpers, text, cfg }) {
     const uid = String(event.senderID);
     let info = {};
@@ -142,19 +148,23 @@ async function aiReply({ api, event, helpers, text, cfg }) {
     let name = user.name || 'صديقي';
     let gender = guessGender({ name, nickname: user.nickname || '', apiGender: user.gender || '', saved: loadGenders()[uid] });
     
-    // تثبيت هوية المطور
-    if (isAdmin) {
-        name = 'تويكس';
-        gender = 'male';
-    }
+    if (isAdmin) { name = 'تويكس'; gender = 'male'; }
 
     const A = addr(gender);
     const cleanText = text.replace(/^\.?\s*ميرا\s*/i, '').trim();
     if (!cleanText) return null;
 
     const key = process.env.GEMINI_API_KEY || (cfg && (cfg.GEMINI_KEY || cfg.geminiKey));
+    
     if (!key) {
-        const fallbacks = [`${A.welcome} ${A.dear} 💟\nكيف أساعدك اليوم؟`, `أنا هنا ${A.dear} 🩷 اكتب سؤالك.`, `${A.sure}، تفضل/تفضلي بسؤالك 🩷`];
+        const fallbacks = [
+            `${A.welcome} ${A.dear} 💟\nأنا ميرا، كيف أساعدك اليوم؟`,
+            `${A.dear}، أنا هنا 🩷 تفضل/تفضلي بسؤالك.`,
+            `أهلاً ${A.dear}، كيف حالك؟ 💟`
+        ];
+        if (cleanText.includes('كيف حالك') || cleanText.includes('كيفك')) {
+            return `${A.dear}، أنا بخير الحمد لله 💟 وأنت/أنتِ كيف حالك؟`;
+        }
         return fallbacks[Math.floor(Math.random() * fallbacks.length)];
     }
 
@@ -165,9 +175,8 @@ async function aiReply({ api, event, helpers, text, cfg }) {
 - هل هو المطور؟: ${isAdmin ? 'نعم، هذا هو المطور تويكس' : 'لا'}
 
 قواعد صارمة:
-- المطور الخاص بك هو "تويكس" (Twix)، وهو شاب/رجل. تعرفينه جيداً وتعتبرينه صديقك المقرب.
-- إذا سألك أحد عن تويكس أو المطور، قولي إنه صديقك تويكس.
-- أجب بإيجاز (سطر إلى 4 أسطر كحد أقصى).
+- المطور الخاص بك هو "تويكس" (Twix)، وهو شاب/رجل.
+- أجب بإيجاز (سطر إلى 3 أسطر كحد أقصى).
 - لا تبدأي بمقدمات طويلة.
 - استخدمي إيموجي باعتدال (💟🩷✨).
 - لا تكسري الشخصية أبداً ولا تذكري أنك ذكاء اصطناعي.
@@ -181,8 +190,10 @@ async function aiReply({ api, event, helpers, text, cfg }) {
         );
         const reply = res.data?.candidates?.[0]?.content?.parts?.[0]?.text;
         if (reply) return reply.trim();
-    } catch (e) { console.log('[ميرا AI] فشل:', e.message); }
-    return `${A.dear}، حدث خطأ مؤقت 🥲 حاول مجدداً بعد قليل.`;
+    } catch (e) { 
+        console.log('[ميرا AI] فشل API:', e.message); 
+    }
+    return `${A.dear}، حدث خطأ مؤقت في تفكيري 🥲 حاول مجدداً بعد قليل.`;
 }
 
 /* ═══════════ الإعدادات ═══════════ */
@@ -226,6 +237,8 @@ module.exports.run = async ({ api, event, args, helpers, cfg }) => {
 
     if (!sub) return triggerMira(api, event);
 
+    // إذا كان هناك بادئة ونص (مثل .ميرا كيف حالك)
+    try { api.setMessageReaction('💟', event.messageID, () => {}, true); } catch(e) {}
     const reply = await aiReply({ api, event, helpers, text: event.body, cfg });
     if (reply) return helpers.reply(api, event, reply);
 };
@@ -243,7 +256,7 @@ module.exports.onMessage = async ({ api, event, helpers, cfg }) => {
 
         const isAdmin = !!(cfg && typeof cfg.isAdmin === 'function' && cfg.isAdmin(uid));
 
-        // 1) المطور يرد على ملصق بكلمة "حفظ"
+        // 1) حفظ ملصق
         if (isAdmin && event.messageReply && event.messageReply.attachments) {
             if (/^(حفظ|احفظ|خزن)$/i.test(text)) {
                 const att = event.messageReply.attachments[0];
@@ -255,17 +268,26 @@ module.exports.onMessage = async ({ api, event, helpers, cfg }) => {
             }
         }
 
-        // 2) كلمة "ميرا" فقط → ملصق + 💟
-        if (/^ميرا\s*$/i.test(text)) {
+        // 2) كلمة "ميرا" فقط → تفاعل + ملصق
+        if (/^\.?\s*ميرا\s*$/i.test(text)) {
             await triggerMira(api, event);
             return true;
         }
 
-        // 3) "ميرا" + نص → رد ذكي
-        if (/^ميرا\s+\S/i.test(text)) {
+        // 3) "ميرا" + نص (مثل: ميرا كيف حالك) → تفاعل + رد ذكي
+        if (/^\.?\s*ميرا\s+\S/i.test(text)) {
+            // التفاعل أولاً
+            try { 
+                if (typeof api.setMessageReaction === 'function') {
+                    api.setMessageReaction('💟', event.messageID, () => {}, true); 
+                }
+            } catch(e) {}
+            
+            // ثم الرد الذكي
             const reply = await aiReply({ api, event, helpers, text, cfg });
             if (reply) {
-                await helpers.reply(api, event, reply);
+                // نرسله كـ Reply لرسالة المستخدم
+                api.sendMessage({ body: reply }, event.threadID, () => {}, event.messageID);
                 return true;
             }
         }
