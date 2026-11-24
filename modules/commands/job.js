@@ -1,270 +1,328 @@
-/**
- * 🎮 لعبة الوظائف — .وظيفة
- * تبدأ بالأمر ثم تكمل برسائل عادية بدون بادئة: رقم الوظيفة، اعمل، حالة، تبديل، الغاء
- * (يعتمد على onMessage الذي يستدعيه main.js للرسائل العادية)
- *
- * التقدّم: 10 مستويات تُحسب من الخبرة. كل ترقية تفتح وظائف جديدة وتعطي مكافأة نقاط.
- */
 const fs = require('fs-extra');
 const path = require('path');
 
-/* ═══════════ الإعدادات ═══════════ */
-const DATA_DIR = path.join(__dirname, '..', '..', 'Heba_DB');
-const FILE = path.join(DATA_DIR, 'jobs.json');
-const SESSION_TTL = Number(process.env.JOBS_SESSION_TTL_MS) || 10 * 60 * 1000; // تنتهي الجلسة بعد 10 دقائق خمول
-const HEAD = '⌬ ━━ 𝗥𝗘𝗠𝗢 ━━ ⌬';
-const CANCEL = ['الغاء', 'إلغاء', 'stop', 'خروج'];
-const LEVEL_BONUS = 50; // مكافأة الترقية = 50 × رقم المستوى الجديد
+const DB_PATH = path.join(__dirname, '..', '..', 'Heba_DB', 'work.json');
+const COOLDOWN = 60 * 1000;              // 60 ثانية بين كل عملية
+const ENERGY_REGEN_INTERVAL = 5 * 60 * 1000; // تجديد الطاقة كل 5 دقائق
+const ENERGY_REGEN_AMOUNT = 10;
+const MAX_ENERGY = 100;
+const WORK_ENERGY_COST = 25;
 
-// level = أدنى مستوى للاعب لتظهر له الوظيفة
-const JOBS = {
-    "مزارع":       { name: "مزارع",       emoji: "🌾", level: 1,  reward: 50,   cooldown: 30,  desc: "تعمل في الحقل" },
-    "صياد":        { name: "صياد",        emoji: "🎣", level: 1,  reward: 60,   cooldown: 30,  desc: "تصطاد الأسماك" },
-    "نجار":        { name: "نجار",        emoji: "🪚", level: 2,  reward: 100,  cooldown: 45,  desc: "تصنع الأثاث" },
-    "حداد":        { name: "حداد",        emoji: "⚒️", level: 2,  reward: 120,  cooldown: 45,  desc: "تصنع الأدوات" },
-    "خباز":        { name: "خباز",        emoji: "🥖", level: 3,  reward: 160,  cooldown: 60,  desc: "تخبز الخبز" },
-    "طباخ":        { name: "طباخ",        emoji: "👨‍🍳", level: 3,  reward: 180,  cooldown: 60,  desc: "تطبخ الأطباق" },
-    "مهندس":       { name: "مهندس",       emoji: "👷", level: 4,  reward: 300,  cooldown: 90,  desc: "تبني المشاريع" },
-    "تاجر":        { name: "تاجر",        emoji: "💼", level: 4,  reward: 250,  cooldown: 90,  desc: "تبيع وتشتري" },
-    "طبيب":        { name: "طبيب",        emoji: "👨‍⚕️", level: 5,  reward: 400,  cooldown: 120, desc: "تعالج المرضى" },
-    "محامي":       { name: "محامي",       emoji: "⚖️", level: 5,  reward: 450,  cooldown: 120, desc: "تدافع عن الحقوق" },
-    "مبرمج":       { name: "مبرمج",       emoji: "💻", level: 6,  reward: 600,  cooldown: 150, desc: "تكتب الأكواد" },
-    "رجل_أعمال":   { name: "رجل أعمال",   emoji: "🏢", level: 7,  reward: 900,  cooldown: 180, desc: "تدير شركة" },
-    "ملياردير":    { name: "ملياردير",    emoji: "💰", level: 8,  reward: 1500, cooldown: 240, desc: "إمبراطورية اقتصادية" },
-    "وزير":        { name: "وزير",        emoji: "🏛️", level: 9,  reward: 2200, cooldown: 270, desc: "تدير وزارة" },
-    "رئيس":        { name: "رئيس الدولة", emoji: "👑", level: 10, reward: 3000, cooldown: 300, desc: "تحكم دولة" }
+// ═══════ الجودات (نوعية القطعة) ═══════
+const QUALITIES = {
+  common:    { name: 'عادي',   emoji: '🟢', minVal: 25,   maxVal: 60,   xp: 15 },
+  good:      { name: 'جيد',    emoji: '🔵', minVal: 70,   maxVal: 150,  xp: 25 },
+  excellent: { name: 'ممتاز',  emoji: '🟣', minVal: 180,  maxVal: 400,  xp: 40 },
+  legendary: { name: 'أسطوري', emoji: '🟡', minVal: 700,  maxVal: 1500, xp: 80 }
 };
 
-// خبرة كل مستوى (المستوى = موضع آخر عتبة وصلتها)
-const LEVELS = [
-    { xp: 0,    title: "مبتدئ",        emoji: "🌱" },
-    { xp: 60,   title: "عامل",         emoji: "🔨" },
-    { xp: 150,  title: "ماهر",         emoji: "🛠️" },
-    { xp: 300,  title: "محترف",        emoji: "⭐" },
-    { xp: 500,  title: "خبير",         emoji: "🌟" },
-    { xp: 800,  title: "متميز",        emoji: "💎" },
-    { xp: 1200, title: "نخبة",         emoji: "🔥" },
-    { xp: 1800, title: "أسطورة",       emoji: "💫" },
-    { xp: 2600, title: "عظيم",         emoji: "👑" },
-    { xp: 3600, title: "أسطورة خالدة", emoji: "🏆" }
+// ═══════ أنواع القطع ═══════
+const ITEM_TYPES = [
+  { name: 'سيف',   emoji: '🗡️' },
+  { name: 'درع',   emoji: '🛡️' },
+  { name: 'خوذة',  emoji: '⛑️' },
+  { name: 'رمح',   emoji: '🏹' },
+  { name: 'فأس',   emoji: '🪓' },
+  { name: 'خنجر',  emoji: '🔪' }
 ];
 
-/* ═══════════ الحفظ ═══════════ */
-fs.ensureDirSync(DATA_DIR);
+// ═══════ الأدوات (كل ترقية تعطي فرصاً أعلى للجودة الأسطورية) ═══════
+const TOOLS = [
+  { name: 'مطرقة خشبية',   cost: 0,      bonus: 1.0, chances: { common: 0.60, good: 0.30, excellent: 0.09, legendary: 0.01 } },
+  { name: 'مطرقة حجرية',   cost: 800,    bonus: 1.3, chances: { common: 0.50, good: 0.35, excellent: 0.13, legendary: 0.02 } },
+  { name: 'مطرقة حديدية',  cost: 3000,   bonus: 1.7, chances: { common: 0.40, good: 0.38, excellent: 0.18, legendary: 0.04 } },
+  { name: 'مطرقة فولاذية', cost: 10000,  bonus: 2.2, chances: { common: 0.28, good: 0.40, excellent: 0.25, legendary: 0.07 } },
+  { name: 'مطرقة ماسية',   cost: 35000,  bonus: 3.0, chances: { common: 0.15, good: 0.38, excellent: 0.35, legendary: 0.12 } },
+  { name: 'مطرقة ذهبية',   cost: 100000, bonus: 4.0, chances: { common: 0.08, good: 0.30, excellent: 0.42, legendary: 0.20 } },
+  { name: 'مطرقة أسطورية', cost: 300000, bonus: 6.0, chances: { common: 0.02, good: 0.18, excellent: 0.45, legendary: 0.35 } }
+];
 
-function load() {
-    try { if (fs.existsSync(FILE)) return fs.readJsonSync(FILE); } catch (e) { console.error('jobs: فشل قراءة الملف', e.message); }
-    return {};
+// ═══════ قاعدة البيانات ═══════
+function loadDB() {
+  try { return JSON.parse(fs.readFileSync(DB_PATH, 'utf8')); }
+  catch (e) { return {}; }
 }
-function save(data) {
-    try { fs.writeJsonSync(FILE, data, { spaces: 2 }); } catch (e) { console.error('jobs: فشل الحفظ', e.message); }
-}
-const getUser = id => load()[String(id)] || { job: null, xp: 0, earned: 0, works: 0, lastWork: 0 };
-function saveUser(id, u) {
-    const all = load();
-    all[String(id)] = u;
-    save(all);
+function saveDB(db) {
+  fs.ensureDirSync(path.dirname(DB_PATH));
+  fs.writeFileSync(DB_PATH, JSON.stringify(db, null, 2));
 }
 
-/* ═══════════ المستويات والوظائف ═══════════ */
-const levelOf = xp => LEVELS.reduce((lv, l, i) => (xp >= l.xp ? i + 1 : lv), 1);
-const infoOf = xp => LEVELS[levelOf(xp) - 1];
-const nextLevelOf = xp => LEVELS[levelOf(xp)] || null; // null عند أعلى مستوى
-const jobsAtLevel = level => Object.entries(JOBS).filter(([, j]) => j.level === level).map(([key, j]) => ({ key, ...j }));
-const availableJobs = xp => Object.entries(JOBS).filter(([, j]) => j.level <= levelOf(xp)).map(([key, j]) => ({ key, ...j }));
+function getUser(db, uid) {
+  if (!db[uid]) {
+    db[uid] = {
+      level: 1, xp: 0, toolLevel: 0,
+      energy: MAX_ENERGY, lastWork: 0, lastEnergyUpdate: Date.now(),
+      inventory: [], totalEarned: 0, totalWorks: 0
+    };
+  }
+  if (!Array.isArray(db[uid].inventory)) db[uid].inventory = [];
+  return db[uid];
+}
 
-/** سطران: المستوى والخبرة مع شريط التقدم */
-function levelLines(xp, helpers) {
-    const info = infoOf(xp);
-    const next = nextLevelOf(xp);
-    const lines = [`📊 المستوى: ${levelOf(xp)} — ${info.emoji} ${info.title}`];
-    if (next) {
-        lines.push(`⭐ الخبرة: ${xp} / ${next.xp}`);
-        lines.push(helpers.bar(xp - info.xp, next.xp - info.xp));
-    } else {
-        lines.push(`⭐ الخبرة: ${xp} (أعلى مستوى 🏆)`);
+function regenEnergy(u) {
+  const now = Date.now();
+  const elapsed = now - (u.lastEnergyUpdate || now);
+  const cycles = Math.floor(elapsed / ENERGY_REGEN_INTERVAL);
+  if (cycles > 0) {
+    u.energy = Math.min(MAX_ENERGY, (u.energy || 0) + cycles * ENERGY_REGEN_AMOUNT);
+    u.lastEnergyUpdate = now - (elapsed % ENERGY_REGEN_INTERVAL);
+  }
+}
+
+function xpNeeded(level) { return 100 + (level - 1) * 80; }
+
+function progressBar(cur, max, len = 10) {
+  const pct = Math.min(1, Math.max(0, cur / max));
+  const filled = Math.round(pct * len);
+  return '▰'.repeat(filled) + '▱'.repeat(len - filled) + ` ${Math.floor(pct * 100)}%`;
+}
+
+function fmt(n) { return String(Math.floor(Number(n) || 0)).replace(/\B(?=(\d{3})+(?!\d))/g, ','); }
+
+// ═══════ دوال النقاط ═══════
+function addPoints(states, uid, amount) {
+  if (!states) return false;
+  try {
+    for (const m of ['addPoints', 'addBalance', 'addMoney']) {
+      if (typeof states[m] === 'function') { states[m](uid, amount); return true; }
     }
-    return lines;
-}
-
-/* ═══════════ الجلسات (في الذاكرة) ═══════════ */
-const sessions = new Map(); // "thread:user" → { step, jobs, job, at }
-
-function react(api, emoji, messageID, threadID) {
-    if (!messageID || !threadID) return;
-    try { // المكتبة الحالية تطلب threadID وقد تُرجع Promise مرفوضًا: نلتقطه حتى لا يظهر خطأ في السجل
-        const p = api.setMessageReaction(emoji, messageID, threadID, () => {}, true);
-        if (p && typeof p.catch === 'function') p.catch(() => {});
-    } catch (e) { /* غير مدعوم */ }
-}
-
-async function showMenu({ api, event, helpers }, user) {
-    const jobs = availableJobs(user.xp);
-    const next = nextLevelOf(user.xp);
-
-    let text = `${HEAD}\n\n`;
-    text += levelLines(user.xp, helpers).join('\n') + '\n';
-    text += `💼 وظيفتك: ${user.job && JOBS[user.job] ? JOBS[user.job].name : 'بدون'}\n\n`;
-    text += `📋 اختر وظيفة (اكتب الرقم فقط):\n\n`;
-    jobs.forEach((j, i) => {
-        text += `[${i + 1}] ${j.emoji} ${j.name}${user.job === j.key ? ' ✅' : ''}\n`;
-        text += `      💰 ${j.reward} | ⏱️ ${j.cooldown}ث\n`;
-    });
-    if (next) {
-        const upcoming = jobsAtLevel(levelOf(user.xp) + 1);
-        text += `\n🔒 المستوى ${levelOf(user.xp) + 1} (عند ${next.xp} خبرة)`;
-        if (upcoming.length) text += ` يفتح: ${upcoming.map(j => `${j.emoji} ${j.name}`).join('، ')}`;
-        text += '\n';
+    const d = states.getData(uid);
+    d.points = (Number(d.points) || 0) + amount;
+    for (const m of ['setData', 'updateData', 'saveData', 'set']) {
+      if (typeof states[m] === 'function') { states[m](uid, d); break; }
     }
-    text += `\n💡 اكتب رقم الوظيفة للاختيار.\n🛑 للإلغاء: الغاء`;
-
-    sessions.set(`${event.threadID}:${event.senderID}`, { step: 'choose_job', jobs, at: Date.now() });
-    return helpers.reply(api, event, text);
+    for (const m of ['save', 'saveAll', 'flush']) {
+      if (typeof states[m] === 'function') { states[m](); break; }
+    }
+    return true;
+  } catch (e) { return false; }
 }
 
-/* ═══════════ الأمر ═══════════ */
+function getPoints(states, uid) {
+  if (!states) return 0;
+  try { return Number(states.getData(uid).points) || 0; } catch (e) { return 0; }
+}
+
+function spendPoints(states, uid, amount) {
+  if (!states) return false;
+  try {
+    for (const m of ['spendPoints', 'removePoints', 'deductPoints']) {
+      if (typeof states[m] === 'function') return states[m](uid, amount);
+    }
+    const d = states.getData(uid);
+    if ((Number(d.points) || 0) < amount) return false;
+    d.points = (Number(d.points) || 0) - amount;
+    for (const m of ['setData', 'updateData', 'saveData', 'set']) {
+      if (typeof states[m] === 'function') { states[m](uid, d); break; }
+    }
+    for (const m of ['save', 'saveAll', 'flush']) {
+      if (typeof states[m] === 'function') { states[m](); break; }
+    }
+    return true;
+  } catch (e) { return false; }
+}
+
+function pickQuality(chances) {
+  const roll = Math.random();
+  let acc = 0;
+  for (const q of ['legendary', 'excellent', 'good', 'common']) {
+    acc += chances[q];
+    if (roll < acc) return q;
+  }
+  return 'common';
+}
+
+const TOP = '╔════════════════════════╗';
+const MID = '╠════════════════════════╣';
+const BOT = '╚════════════════════════╝';
+
 module.exports.config = {
-    name: 'وظيفة', aliases: ['عمل', 'وظيفتي'],
-    description: 'لعبة الوظائف: اعمل وارتقِ لتفتح وظائف أفضل',
-    usage: 'وظيفة', category: 'economy', cooldown: 3, adminOnly: false,
-    credits: 'ايمن'
+  name: 'عمل',
+  aliases: ['work', 'شغل', 'حداد', 'صنع'],
+  description: '⚒️ نظام عمل الحداد: اصنع أسلحة، بِعها، وطوّر أدواتك',
+  usage: 'عمل | عمل ملفي | عمل مخزون | عمل بيع | عمل ترقية | عمل طاقة',
+  category: 'economy',
+  cooldown: 2,
+  adminOnly: false
 };
 
-module.exports.run = async ctx => {
-    const { api, event } = ctx;
-    react(api, '💼', event.messageID, event.threadID);
-    return showMenu(ctx, getUser(event.senderID)); // استدعاء الأمر مجددًا يعرض القائمة من جديد
-};
+module.exports.run = async ({ api, event, args, helpers, states }) => {
+  const uid = String(event.senderID);
+  const reply = t => helpers.reply(api, event, t);
+  const sub = (args[0] || '').toLowerCase();
 
-/* ═══════════ معالج الرسائل العادية (يستدعيه main.js) ═══════════ */
-module.exports.onMessage = async ctx => {
-    const { api, event, helpers, states } = ctx;
-    const { threadID, senderID, messageID, body } = event;
-    const key = `${threadID}:${senderID}`;
-    const session = sessions.get(key);
-    if (!session) return false;
+  const db = loadDB();
+  const user = getUser(db, uid);
+  regenEnergy(user);
 
-    if (Date.now() - session.at > SESSION_TTL) { sessions.delete(key); return false; }
+  /* ═══════ ملفي ═══════ */
+  if (sub === 'ملفي' || sub === 'profile') {
+    saveDB(db);
+    const tool = TOOLS[user.toolLevel];
+    const need = xpNeeded(user.level);
+    const pts = getPoints(states, uid);
+    const invCount = user.inventory.length;
+    return reply(
+      `${TOP}\n     ⚒️ ملف الحداد ⚒️\n${MID}\n` +
+      `📊 المستوى: ${user.level}\n` +
+      `✨ الخبرة: ${user.xp}/${need}\n` +
+      `   ${progressBar(user.xp, need)}\n` +
+      `${MID}\n` +
+      `🔨 الأداة: ${tool.name}\n` +
+      `   (مضاعف x${tool.bonus})\n` +
+      `⚡ الطاقة: ${user.energy}/${MAX_ENERGY}\n` +
+      `   ${progressBar(user.energy, MAX_ENERGY)}\n` +
+      `${MID}\n` +
+      `📦 العناصر بالمخزون: ${invCount}\n` +
+      `💰 نقاطك: ${fmt(pts)}\n` +
+      `💵 إجمالي أرباحك: ${fmt(user.totalEarned)}\n` +
+      `🔢 مرات العمل: ${user.totalWorks}\n` +
+      `${BOT}`
+    );
+  }
 
-    const input = String(body || '').trim();
-    const say = text => helpers.reply(api, event, text);
+  /* ═══════ مخزون ═══════ */
+  if (sub === 'مخزون' || sub === 'inventory') {
+    saveDB(db);
+    const inv = user.inventory;
+    if (!inv.length) return reply(`📦 مخزونك فارغ! ابدأ بـ .عمل لصنع أول قطعة.`);
+    let body = `${TOP}\n     📦 مخزون الحداد 📦\n${MID}\n`;
+    let total = 0;
+    inv.slice(0, 15).forEach((item, i) => {
+      body += `${i + 1}. ${item.emoji} ${item.name} ${QUALITIES[item.quality].emoji} ${QUALITIES[item.quality].name}\n`;
+      body += `   💰 ${fmt(item.value)} نقطة\n`;
+      total += item.value;
+    });
+    if (inv.length > 15) body += `\n... و${inv.length - 15} قطعة إضافية\n`;
+    body += `${MID}\n💵 إجمالي القيمة: ${fmt(total)} نقطة\n`;
+    body += `🛒 اكتب .عمل بيع لبيع كل العناصر\n${BOT}`;
+    return reply(body);
+  }
 
-    if (CANCEL.includes(input)) {
-        sessions.delete(key);
-        await say(`${HEAD}\n\n✅ تم إنهاء اللعبة.`);
-        return true;
+  /* ═══════ بيع ═══════ */
+  if (sub === 'بيع' || sub === 'sell') {
+    const inv = user.inventory;
+    if (!inv.length) { saveDB(db); return reply('⚠️ لا يوجد شيء لبيعه، مخزونك فارغ!'); }
+    const totalValue = inv.reduce((s, i) => s + i.value, 0);
+    const count = inv.length;
+    user.inventory = [];
+    saveDB(db);
+    const ok = addPoints(states, uid, totalValue);
+    if (!ok) return reply('❌ تعذّر إضافة النقاط، حاول لاحقاً.');
+    const pts = getPoints(states, uid);
+    return reply(
+      `${TOP}\n     💰 تم البيع 💰\n${MID}\n` +
+      `📦 عدد العناصر: ${count}\n` +
+      `💵 المكسب: +${fmt(totalValue)} نقطة\n` +
+      `💳 رصيدك الآن: ${fmt(pts)} نقطة\n${BOT}`
+    );
+  }
+
+  /* ═══════ ترقية ═══════ */
+  if (sub === 'ترقية' || sub === 'upgrade') {
+    const cur = TOOLS[user.toolLevel];
+    const next = TOOLS[user.toolLevel + 1];
+    if (!next) {
+      saveDB(db);
+      return reply(`🏆 وصلت لأقوى أداة: ${cur.name}\nلا توجد ترقيات متاحة.`);
     }
-
-    /* ─── اختيار وظيفة ─── */
-    if (session.step === 'choose_job') {
-        if (!/^\d{1,3}$/.test(input)) return false; // كلام عادي في المحادثة: نتجاهله بصمت
-        const num = parseInt(input, 10);
-        if (num < 1 || num > session.jobs.length) {
-            await say(`${HEAD}\n\n⚠️ اكتب رقمًا من 1 إلى ${session.jobs.length}.`);
-            return true;
-        }
-        const chosen = session.jobs[num - 1];
-        const user = getUser(senderID);
-        user.job = chosen.key;
-        saveUser(senderID, user);
-
-        session.step = 'work';
-        session.job = chosen;
-        session.at = Date.now();
-        react(api, '✅', messageID, threadID);
-        await say(
-            `${HEAD}\n\n✅ تم تعيينك في: ${chosen.emoji} ${chosen.name}\n\n` +
-            `💰 الراتب: ${chosen.reward}\n⏱️ الانتظار: ${chosen.cooldown}ث\n📝 ${chosen.desc}\n\n` +
-            `💡 اكتب (اعمل) للبدء.\n🛑 للإلغاء: الغاء`
-        );
-        return true;
+    const pts = getPoints(states, uid);
+    if (args[1] === 'تأكيد' || args[1] === 'confirm') {
+      if (pts < next.cost) {
+        saveDB(db);
+        return reply(`❌ تحتاج ${fmt(next.cost - pts)} نقطة إضافية.\nرصيدك: ${fmt(pts)}/${fmt(next.cost)}`);
+      }
+      const ok = spendPoints(states, uid, next.cost);
+      if (!ok) { saveDB(db); return reply('❌ فشل الخصم.'); }
+      user.toolLevel++;
+      saveDB(db);
+      return reply(
+        `${TOP}\n     🎉 ترقية ناجحة 🎉\n${MID}\n` +
+        `🔨 الأداة الجديدة: ${next.name}\n` +
+        `⚡ مضاعف الأرباح: x${next.bonus}\n` +
+        `📈 فرصة الأسطوري: ${(next.chances.legendary * 100).toFixed(0)}%\n` +
+        `💳 رصيدك المتبقي: ${fmt(pts - next.cost)}\n${BOT}`
+      );
     }
+    saveDB(db);
+    return reply(
+      `${TOP}\n     🛠️ الترقية 🛠️\n${MID}\n` +
+      `🔨 الحالية: ${cur.name} (x${cur.bonus})\n${MID}\n` +
+      `⬆️ المتاحة: ${next.name} (x${next.bonus})\n` +
+      `💰 السعر: ${fmt(next.cost)} نقطة\n` +
+      `💳 رصيدك: ${fmt(pts)} نقطة\n${MID}\n` +
+      `للتأكيد: .عمل ترقية تأكيد\n${BOT}`
+    );
+  }
 
-    /* ─── مرحلة العمل ─── */
-    if (session.step === 'work') {
-        const user = getUser(senderID);
-        const job = JOBS[user.job];
-        if (!job) {
-            sessions.delete(key);
-            await say(`${HEAD}\n\n⚠️ ليس لديك وظيفة. اكتب (وظيفة) للبدء من جديد.`);
-            return true;
-        }
+  /* ═══════ طاقة ═══════ */
+  if (sub === 'طاقة' || sub === 'energy') {
+    saveDB(db);
+    const nextIn = Math.ceil((ENERGY_REGEN_INTERVAL - (Date.now() - user.lastEnergyUpdate)) / 60000);
+    return reply(
+      `${TOP}\n     ⚡ الطاقة ⚡\n${MID}\n` +
+      `⚡ الحالية: ${user.energy}/${MAX_ENERGY}\n` +
+      `   ${progressBar(user.energy, MAX_ENERGY)}\n` +
+      `⏱️ تجديد: +${ENERGY_REGEN_AMOUNT} كل 5 دقائق\n` +
+      (user.energy < MAX_ENERGY ? `⏳ التجديد القادم: ${Math.max(1, nextIn)} دقيقة\n` : '') +
+      `💡 كل عملية تستهلك ${WORK_ENERGY_COST} طاقة\n${BOT}`
+    );
+  }
 
-        if (['حالة', 'معلومات', 'انا'].includes(input)) {
-            session.at = Date.now();
-            const next = nextLevelOf(user.xp);
-            let text = `${HEAD}\n\n${job.emoji} الوظيفة: ${job.name}\n`;
-            text += levelLines(user.xp, helpers).join('\n') + '\n';
-            text += `💵 إجمالي الأرباح: ${user.earned}\n📈 عدد مرات العمل: ${user.works}\n`;
-            if (next) text += `🎯 للترقية للمستوى ${levelOf(user.xp) + 1}: ينقصك ${next.xp - user.xp} خبرة`;
-            text += `\n\n💡 اكتب (اعمل) للعمل\n🔄 لتبديل الوظيفة: (تبديل)\n🛑 للخروج: الغاء`;
-            await say(text);
-            return true;
-        }
+  /* ═══════ العمل (افتراضي) ═══════ */
+  const now = Date.now();
+  const timeLeft = COOLDOWN - (now - user.lastWork);
+  if (timeLeft > 0) {
+    saveDB(db);
+    return reply(`⏳ انتظر ${Math.ceil(timeLeft / 1000)} ثانية قبل العمل مجدداً.`);
+  }
+  if (user.energy < WORK_ENERGY_COST) {
+    saveDB(db);
+    return reply(`⚡ طاقتك غير كافية! (${user.energy}/${WORK_ENERGY_COST})\nاكتب .عمل طاقة لمعرفة وقت التجديد.`);
+  }
 
-        if (['تبديل', 'تغيير', 'وظائف'].includes(input)) {
-            await showMenu(ctx, user);
-            return true;
-        }
+  user.energy -= WORK_ENERGY_COST;
+  user.lastWork = now;
+  user.totalWorks++;
 
-        if (!['اعمل', 'عمل', 'work'].includes(input)) return false; // أي كلام آخر: نتجاهله بصمت
+  const tool = TOOLS[user.toolLevel];
+  const quality = pickQuality(tool.chances);
+  const qData = QUALITIES[quality];
+  const itemType = ITEM_TYPES[Math.floor(Math.random() * ITEM_TYPES.length)];
 
-        session.at = Date.now();
-        const now = Date.now();
-        const left = user.lastWork + job.cooldown * 1000 - now;
-        if (left > 0) {
-            await say(`${HEAD}\n\n⏱️ انتظر ${Math.ceil(left / 1000)} ثانية.`);
-            return true;
-        }
+  const baseVal = Math.floor(qData.minVal + Math.random() * (qData.maxVal - qData.minVal));
+  const levelBonus = 1 + (user.level - 1) * 0.05;
+  const isCrit = Math.random() < 0.10;
+  const critMult = isCrit ? 2 : 1;
+  const value = Math.floor(baseVal * tool.bonus * levelBonus * critMult);
 
-        const levelBefore = levelOf(user.xp);
-        const reward = Math.floor(job.reward * (0.8 + Math.random() * 0.4));
-        const xpGain = Math.max(3, Math.floor(reward / 8));
+  user.inventory.push({ name: itemType.name, emoji: itemType.emoji, quality, value, at: now });
+  user.totalEarned += value;
 
-        user.xp += xpGain;
-        user.earned += reward;
-        user.works++;
-        user.lastWork = now;
-        saveUser(senderID, user);
+  const xpGain = qData.xp + user.level * 2;
+  user.xp += xpGain;
+  let leveledUp = false;
+  while (user.xp >= xpNeeded(user.level)) {
+    user.xp -= xpNeeded(user.level);
+    user.level++;
+    leveledUp = true;
+  }
 
-        // الترقية: مكافأة عن كل مستوى جديد + قائمة الوظائف التي انفتحت
-        const levelAfter = levelOf(user.xp);
-        let bonus = 0;
-        const unlocked = [];
-        for (let lv = levelBefore + 1; lv <= levelAfter; lv++) {
-            bonus += LEVEL_BONUS * lv;
-            unlocked.push(...jobsAtLevel(lv));
-        }
+  saveDB(db);
 
-        // النقاط تدخل في رصيد البوت العام (نفس نقاط .رصيد و.يومي)
-        const wallet = states.getData(String(senderID));
-        wallet.points += reward + bonus;
-        states.saveData(String(senderID), wallet);
+  let body =
+    `${TOP}\n     ⚒️ عمل الحداد ⚒️\n${MID}\n` +
+    `🔥 أشعلت النار وطرقت الحديد...\n` +
+    `📦 صنعت: ${itemType.emoji} ${itemType.name}\n` +
+    `✨ الجودة: ${qData.emoji} ${qData.name}\n` +
+    `💰 القيمة: ${fmt(value)} نقطة${isCrit ? ' ⚡ (ضربة مميزة x2!)' : ''}\n` +
+    `${MID}\n` +
+    `✨ خبرة: +${xpGain} XP\n` +
+    `⚡ الطاقة: ${user.energy}/${MAX_ENERGY}\n`;
 
-        let text = `⌬ ━━ 𝗥𝗘𝗠𝗢 ━━ ⌬\n\n${job.emoji} ${job.name} انتهى من العمل!\n\n`;
-        text += `💰 ربحت: ${reward} نقطة\n⭐ خبرة: +${xpGain}\n`;
-        text += `💵 رصيدك: ${helpers.fmt(wallet.points)}\n`;
-
-        if (levelAfter > levelBefore) {
-            const info = infoOf(user.xp);
-            text += `\n🎉 ترقية! وصلت للمستوى ${levelAfter} — ${info.emoji} ${info.title}\n`;
-            text += `🎁 مكافأة الترقية: +${helpers.fmt(bonus)} نقطة\n`;
-            if (unlocked.length) {
-                text += `\n🔓 وظائف جديدة انفتحت لك:\n`;
-                text += unlocked.map(j => `   ${j.emoji} ${j.name} — 💰 ${j.reward} | ⏱️ ${j.cooldown}ث`).join('\n');
-                text += `\n💡 اكتب (تبديل) لاختيار وظيفة جديدة.`;
-            }
-            react(api, '🎉', messageID, threadID);
-        } else {
-            const next = nextLevelOf(user.xp);
-            text += next ? `${levelLines(user.xp, helpers)[2]}\n🎯 ينقصك ${next.xp - user.xp} خبرة للترقية\n` : '';
-            react(api, '💰', messageID, threadID);
-        }
-        text += `\n\n💡 اكتب (اعمل) مجددًا بعد ${job.cooldown}ث.`;
-
-        await say(text);
-        return true;
-    }
-
-    return false;
+  if (leveledUp) body += `${MID}\n🎉 مبروك! وصلت للمستوى ${user.level}\n`;
+  const need = xpNeeded(user.level);
+  body += `${MID}\n📊 المستوى: ${user.level}\n`;
+  body += `   ${progressBar(user.xp, need)}\n${BOT}`;
+  return reply(body);
 };
