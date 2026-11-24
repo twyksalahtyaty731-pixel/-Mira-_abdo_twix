@@ -3,9 +3,7 @@ import axios from "axios";
 import { loadImage, createCanvas } from "canvas";
 import path from "path";
 
-// ────── دوال مساعدة ─────────────────────────────────────────────
-const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-
+// ────── helper: text wrap ─────────────────────────────────────────────
 function wrapText(ctx, text, maxWidth) {
   return new Promise(resolve => {
     if (ctx.measureText(text).width < maxWidth) return resolve([text]);
@@ -39,6 +37,7 @@ function wrapText(ctx, text, maxWidth) {
   });
 }
 
+// ────── جلب الاسم بنفس طريقة اكس_او ─────────────────────────────
 async function getNameFromDB(uid, api, Users) {
   try {
     const res = await Users.find(uid);
@@ -55,53 +54,11 @@ async function getNameFromDB(uid, api, Users) {
   return "User";
 }
 
-// دالة تحديث رسالة التحميل (تعديل أو حذف وإعادة إرسال)
-function updateProgress(api, threadID, text, currentMsgID) {
-  return new Promise((resolve) => {
-    try {
-      // محاولة التعديل أولاً
-      if (typeof api.editMessage === 'function') {
-        api.editMessage(text, currentMsgID, (err) => {
-          if (!err) return resolve(currentMsgID);
-          // إذا فشل التعديل، نجرب الحذف والإرسال
-          fallback();
-        });
-      } else {
-        fallback();
-      }
-    } catch (e) {
-      fallback();
-    }
-
-    function fallback() {
-      try {
-        if (typeof api.unsendMessage === 'function') {
-          api.unsendMessage(currentMsgID, () => {});
-        }
-        api.sendMessage(text, threadID, (err, info) => {
-          resolve(info && info.messageID ? info.messageID : null);
-        });
-      } catch (e) {
-        resolve(null);
-      }
-    }
-  });
-}
-
-function progressBar(percent) {
-  const total = 5;
-  const filled = Math.round((percent / 100) * total);
-  return '▰'.repeat(filled) + '▱'.repeat(total - filled) + ` ${percent}%`;
-}
-
-// ═══════════════════════════════════════════════
-// 🤖 الأمر الرئيسي
-// ═══════════════════════════════════════════════
 class HackCommand {
   constructor() {
-    this.name        = "اختراق"; 
-    this.aliases     = ["hack", "hacker", "هكر"]; 
-    this.description = "😅 مولد هكر وهمي مع شريط تحميل تفاعلي";
+    this.name        = "هكر";
+    this.aliases     = ["hacker"];
+    this.description = "😅 مولد هكر وهمي";
     this.author      = "NAZRUL / Alvi-Boss";
     this.role        = 0;
     this.cooldowns   = 0;
@@ -110,37 +67,36 @@ class HackCommand {
   async execute({ api, event, Users }) {
     const { threadID, messageID } = event;
 
+    // ✅ اتصلح: react مكنتش متعرفة و كانت بتوقع الأمر كله
     const react = (emoji) => {
       try { api.setMessageReaction(emoji, messageID, () => {}, true); } catch {}
     };
 
+    // ✅ اتصلح: كان بيبعت messageID مكان callback
+    const send = (body, att = null) =>
+      api.sendMessage(
+        att ? { body, attachment: att } : { body },
+        threadID,
+        undefined,
+        messageID
+      );
+
     react("⏳");
 
     try {
-      // 1. إرسال رسالة التحميل الأولى
-      let loadingMsgID = null;
-      await new Promise((resolve) => {
-        api.sendMessage(`LOADING ${progressBar(0)}`, threadID, (err, info) => {
-          if (!err && info) loadingMsgID = info.messageID;
-          resolve();
-        }, messageID);
-      });
-
-      // 2. تحديد المستخدم المستهدف وجلب اسمه
+      // ────── تحديد المستخدم المستهدف ──────────────────────
       const mentionID = Object.keys(event.mentions || {})[0] || event.senderID;
+
+      // ────── جلب الاسم ──────────────────────────────────────────
       const userName = await getNameFromDB(mentionID, api, Users);
 
-      // 3. مسارات الكاش وتجهيز الملفات
+      // ────── مسارات الكاش ──────────────────────────────────────────
       const cacheDir  = path.join(process.cwd(), "cache");
       await fs.ensureDir(cacheDir);
       const bgPath     = path.join(cacheDir, `hack_bg_${Date.now()}.png`);
       const avatarPath = path.join(cacheDir, `hack_av_${Date.now()}.png`);
 
-      // تحديث الشريط إلى 20%
-      await sleep(700);
-      if (loadingMsgID) loadingMsgID = await updateProgress(api, threadID, `LOADING ${progressBar(20)}`, loadingMsgID);
-
-      // 4. تحميل صورة البروفايل
+      // ────── تحميل صورة البروفايل ──────────────────────────────
       try {
         const avRes = await axios.get(
           `https://graph.facebook.com/${mentionID}/picture?width=720&height=720&access_token=6628568379%7Cc1e620fa708a1d5696fb991c1bde5662`,
@@ -149,29 +105,24 @@ class HackCommand {
         await fs.writeFile(avatarPath, Buffer.from(avRes.data));
       } catch (e) {
         react("❌");
-        return api.sendMessage(`❌ فشل تحميل صورة البروفايل:\n${e.message}`, threadID, messageID);
+        return send(`❌ فشل تحميل صورة البروفايل:\n${e.message}`);
       }
 
-      // تحديث الشريط إلى 50%
-      await sleep(700);
-      if (loadingMsgID) loadingMsgID = await updateProgress(api, threadID, `LOADING ${progressBar(50)}`, loadingMsgID);
-
-      // 5. تحميل الخلفية
+      // ────── تحميل الخلفية ──────────────────────────────────────
       const bgLink = "https://drive.google.com/uc?id=1_S9eqbx8CxMMxUdOfATIDXwaKWMC-8ox&export=download";
       try {
-        const bgRes = await axios.get(bgLink, { responseType: "arraybuffer", timeout: 20000 });
+        const bgRes = await axios.get(bgLink, {
+          responseType: "arraybuffer",
+          timeout: 20000
+        });
         await fs.writeFile(bgPath, Buffer.from(bgRes.data));
       } catch (e) {
         react("❌");
         await fs.remove(avatarPath).catch(() => {});
-        return api.sendMessage(`❌ فشل تحميل الخلفية:\n${e.message}`, threadID, messageID);
+        return send(`❌ فشل تحميل الخلفية:\n${e.message}`);
       }
 
-      // تحديث الشريط إلى 80%
-      await sleep(700);
-      if (loadingMsgID) loadingMsgID = await updateProgress(api, threadID, `LOADING ${progressBar(80)}`, loadingMsgID);
-
-      // 6. رسم الكانفاس
+      // ────── رسم الكانفاس ──────────────────────────────────────────
       let finalPath;
       try {
         const background = await loadImage(bgPath);
@@ -186,6 +137,7 @@ class HackCommand {
         ctx.textAlign = "start";
 
         const lines = await wrapText(ctx, userName, 1160);
+        // ✅ اتصلح: كان lines.join("\n") والكانفاس مش بيرسم \n، دلوقتي بيرسم كل سطر لوحده
         if (lines) {
           lines.forEach((line, i) => {
             ctx.fillText(line, 136, 335 + (i * 28));
@@ -200,34 +152,14 @@ class HackCommand {
         react("❌");
         await fs.remove(bgPath).catch(() => {});
         await fs.remove(avatarPath).catch(() => {});
-        return api.sendMessage(`❌ خطأ في رسم الصورة:\n${e.message}`, threadID, messageID);
+        return send(`❌ خطأ في رسم الصورة:\n${e.message}`);
       }
 
-      // تحديث الشريط إلى 100% مع رسالة الاستخراج
-      await sleep(700);
-      if (loadingMsgID) {
-        loadingMsgID = await updateProgress(api, threadID, `LOADING ${progressBar(100)}\n\n⏳ جاري استخراج البيانات والولوج...`, loadingMsgID);
-      }
-
-      // 7. إرسال الصورة النهائية
-      await sleep(1500); // انتظار بسيط ليقرأ المستخدم الرسالة
+      // ────── إرسال النتيجة ──────────────────────────────────────
       react("✅");
+      await send("🔥|  𝘏𝘈 𝘘𝘖 𝘎𝘜𝘈 𝘗𝘐𝘍𝘐𝘌𝘔 !", fs.createReadStream(finalPath));
 
-      await new Promise((resolve) => {
-        api.sendMessage(
-          { body: "🔥|  𝘏𝘈 𝘘𝘖 𝘎𝘜𝘈 𝘗𝘐𝘍𝘐𝘌𝘔 !", attachment: fs.createReadStream(finalPath) },
-          threadID,
-          (err) => resolve(),
-          messageID
-        );
-      });
-
-      // 8. حذف رسالة التحميل ليبقى الشات نظيفاً
-      if (loadingMsgID && typeof api.unsendMessage === 'function') {
-        try { api.unsendMessage(loadingMsgID, () => {}); } catch (e) {}
-      }
-
-      // 9. تنظيف الكاش
+      // ────── تنظيف الكاش ──────────────────────────────────────────
       setTimeout(() => {
         fs.remove(bgPath).catch(() => {});
         fs.remove(avatarPath).catch(() => {});
@@ -237,7 +169,7 @@ class HackCommand {
     } catch (e) {
       react("❌");
       console.error("[hack]", e);
-      api.sendMessage(`❌ خطأ غير متوقع:\n${e.message || String(e)}`, threadID, messageID);
+      send(`❌ خطأ غير متوقع:\n${e.message || String(e)}`);
     }
   }
 }
