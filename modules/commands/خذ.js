@@ -1,7 +1,7 @@
 import fs from "fs-extra";
 import axios from "axios";
-// ✅ تم تغيير المكتبة هنا إلى @napi-rs/canvas
-import { loadImage, createCanvas } from "@napi-rs/canvas";
+// ✅ تم وضع المكتبة الصحيحة هنا
+import { loadImage, createCanvas } from "@napi-rs/canvas"; 
 import path from "path";
 
 // ────── دوال مساعدة ─────────────────────────────────────────────
@@ -56,7 +56,6 @@ async function getNameFromDB(uid, api, Users) {
   return "User";
 }
 
-// دالة تحديث رسالة التحميل (تعديل أو حذف وإعادة إرسال)
 function updateProgress(api, threadID, text, currentMsgID) {
   return new Promise((resolve) => {
     try {
@@ -98,8 +97,8 @@ function progressBar(percent) {
 // ═══════════════════════════════════════════════
 class HackCommand {
   constructor() {
-    this.name        = "اختراق"; // أو "خذ" حسب اسم الملف الذي تريده
-    this.aliases     = ["hack", "hacker", "هكر"]; 
+    this.name        = "اختراق"; 
+    this.aliases     = ["hack", "hacker", "هكر", "خذ"]; 
     this.description = "😅 مولد هكر وهمي مع شريط تحميل تفاعلي";
     this.author      = "NAZRUL / Alvi-Boss";
     this.role        = 0;
@@ -135,7 +134,6 @@ class HackCommand {
       const bgPath     = path.join(cacheDir, `hack_bg_${Date.now()}.png`);
       const avatarPath = path.join(cacheDir, `hack_av_${Date.now()}.png`);
 
-      // تحديث الشريط إلى 20%
       await sleep(700);
       if (loadingMsgID) loadingMsgID = await updateProgress(api, threadID, `LOADING ${progressBar(20)}`, loadingMsgID);
 
@@ -151,7 +149,6 @@ class HackCommand {
         return api.sendMessage(`❌ فشل تحميل صورة البروفايل:\n${e.message}`, threadID, messageID);
       }
 
-      // تحديث الشريط إلى 50%
       await sleep(700);
       if (loadingMsgID) loadingMsgID = await updateProgress(api, threadID, `LOADING ${progressBar(50)}`, loadingMsgID);
 
@@ -166,7 +163,6 @@ class HackCommand {
         return api.sendMessage(`❌ فشل تحميل الخلفية:\n${e.message}`, threadID, messageID);
       }
 
-      // تحديث الشريط إلى 80%
       await sleep(700);
       if (loadingMsgID) loadingMsgID = await updateProgress(api, threadID, `LOADING ${progressBar(80)}`, loadingMsgID);
 
@@ -202,7 +198,6 @@ class HackCommand {
         return api.sendMessage(`❌ خطأ في رسم الصورة:\n${e.message}`, threadID, messageID);
       }
 
-      // تحديث الشريط إلى 100% مع رسالة الاستخراج
       await sleep(700);
       if (loadingMsgID) {
         loadingMsgID = await updateProgress(api, threadID, `LOADING ${progressBar(100)}\n\n⏳ جاري استخراج البيانات والولوج...`, loadingMsgID);
@@ -221,7 +216,7 @@ class HackCommand {
         );
       });
 
-      // 8. حذف رسالة التحميل ليبقى الشات نظيفاً
+      // 8. حذف رسالة التحميل
       if (loadingMsgID && typeof api.unsendMessage === 'function') {
         try { api.unsendMessage(loadingMsgID, () => {}); } catch (e) {}
       }
