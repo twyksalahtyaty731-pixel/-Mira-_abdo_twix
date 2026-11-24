@@ -15,43 +15,34 @@ module.exports.config = {
     adminOnly: false
 };
 
-// رابط الصورة الأصلية النظيفة
 const IMAGE_URL =
     'https://i.ibb.co/HDWd1RWK/Messenger-creation-2543598406122080.jpg';
 
-const MAX_TEXT_LENGTH = 100;
-
 module.exports.run = async ({ api, event, args = [], helpers }) => {
-    const reply = message => helpers.reply(api, event, message);
-
-    const text = args.join(' ')
-        .replace(/[\u0000-\u001f]/g, ' ')
-        .trim();
+    const text = args.join(' ').trim();
 
     if (!text) {
-        return reply(
-            '😂 اكتب العبارة التي تريد وضعها على الصورة.\n\nمثال:\n.ميسي رونالدو عمي'
+        return helpers.reply(
+            api,
+            event,
+            '😂 اكتب العبارة التي تريد وضعها على الصورة.\nمثال:\n.ميسي رونالدو عمي'
         );
     }
 
-    if (text.length > MAX_TEXT_LENGTH) {
-        return reply('⚠️ العبارة طويلة جدًا، اختصرها قليلًا.');
+    if (text.length > 100) {
+        return helpers.reply(
+            api,
+            event,
+            '⚠️ العبارة طويلة جدًا، اختصرها قليلًا.'
+        );
     }
 
     const outputPath = path.join(
         os.tmpdir(),
-        `messi-${Date.now()}-${Math.floor(Math.random() * 99999)}.jpg`
+        `messi-${Date.now()}.jpg`
     );
 
     try {
-        api.setMessageReaction(
-            '⏳',
-            event.messageID,
-            () => {},
-            true
-        );
-
-        // تحميل القالب
         const response = await axios.get(IMAGE_URL, {
             responseType: 'arraybuffer',
             timeout: 25000,
@@ -62,7 +53,6 @@ module.exports.run = async ({ api, event, args = [], helpers }) => {
             Buffer.from(response.data)
         );
 
-        // إنشاء الصورة بنفس أبعاد الأصل
         const canvas = createCanvas(
             image.width,
             image.height
@@ -70,24 +60,15 @@ module.exports.run = async ({ api, event, args = [], helpers }) => {
 
         const ctx = canvas.getContext('2d');
 
-        ctx.drawImage(
-            image,
-            0,
-            0,
-            image.width,
-            image.height
-        );
+        // الصورة الأصلية دون أي تغيير
+        ctx.drawImage(image, 0, 0);
 
-        /*
-         * موضع العبارة القديمة في الصورة:
-         * مركز الصورة أفقيًا
-         * ومركز منطقة العبارة رأسيًا
-         */
+        // موضع عبارة "توكس عمي" في القالب الأصلي
         const centerX = image.width * 0.5;
-        const centerY = image.height * 0.833;
+        const centerY = image.height * 0.80;
 
-        // حدود عرض النص
-        const maxWidth = image.width * 0.88;
+        // عرض الكتابة
+        const maxWidth = image.width * 0.82;
 
         // إعداد النص العربي
         ctx.direction = 'rtl';
@@ -95,11 +76,12 @@ module.exports.run = async ({ api, event, args = [], helpers }) => {
         ctx.textBaseline = 'middle';
         ctx.fillStyle = '#ffffff';
 
-        // خط عريض مشابه لعبارة القالب
-        let fontSize = image.width * 0.095;
+        // حجم الخط الأصلي
+        let fontSize = image.width * 0.085;
 
+        // تصغير الخط عند الحاجة
         while (fontSize > 24) {
-            ctx.font = `900 ${Math.round(fontSize)}px Arial`;
+            ctx.font = `bold ${Math.round(fontSize)}px Arial`;
 
             if (ctx.measureText(text).width <= maxWidth) {
                 break;
@@ -108,15 +90,15 @@ module.exports.run = async ({ api, event, args = [], helpers }) => {
             fontSize -= 2;
         }
 
-        ctx.font = `900 ${Math.round(fontSize)}px Arial`;
+        ctx.font = `bold ${Math.round(fontSize)}px Arial`;
 
-        // ظل خفيف جدًا مثل وضوح النص في الصورة
-        ctx.shadowColor = 'rgba(0, 0, 0, 0.20)';
+        // ظل خفيف جدًا
+        ctx.shadowColor = 'rgba(0, 0, 0, 0.2)';
         ctx.shadowBlur = 2;
         ctx.shadowOffsetX = 1;
         ctx.shadowOffsetY = 1;
 
-        // كتابة النص فقط دون خلفية أو إطار
+        // كتابة العبارة دون مستطيل أو إطار
         ctx.fillText(
             text,
             centerX,
@@ -124,22 +106,18 @@ module.exports.run = async ({ api, event, args = [], helpers }) => {
             maxWidth
         );
 
-        // حفظ الصورة
         fs.writeFileSync(
             outputPath,
             canvas.toBuffer('image/jpeg', 95)
         );
 
-        // إرسال الصورة
         await new Promise((resolve, reject) => {
             const stream = fs.createReadStream(outputPath);
 
             stream.on('error', reject);
 
             api.sendMessage(
-                {
-                    attachment: stream
-                },
+                { attachment: stream },
                 event.threadID,
                 error => {
                     if (error) reject(error);
@@ -149,25 +127,13 @@ module.exports.run = async ({ api, event, args = [], helpers }) => {
             );
         });
 
-        api.setMessageReaction(
-            '✅',
-            event.messageID,
-            () => {},
-            true
-        );
-
     } catch (error) {
-        console.error('[ميسي] Error:', error);
+        console.error('[ميسي]', error);
 
-        api.setMessageReaction(
-            '❌',
-            event.messageID,
-            () => {},
-            true
-        );
-
-        return reply(
-            '❌ تعذر إنشاء الصورة. تحقق من اتصال الخادم ورابط القالب.'
+        return helpers.reply(
+            api,
+            event,
+            '❌ حدث خطأ أثناء إنشاء الصورة.'
         );
 
     } finally {
