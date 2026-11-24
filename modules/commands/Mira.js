@@ -98,75 +98,58 @@ async function saveSticker(api, event, att) {
 
 /* ═══════════ التفاعل وإرسال الملصق ═══════════ */
 async function triggerMira(api, event) {
-    // 1. وضع التفاعل (Reaction) على رسالة صاحب الأمر مباشرة
-    try { 
-        if (typeof api.setMessageReaction === 'function') {
-            api.setMessageReaction('💟', event.messageID, (err) => {
-                if (err) console.log('[ميرا] خطأ في التفاعل:', err);
-            }, true); 
-        }
-    } catch(e) { 
-        console.log('[ميرا] فشل التفاعل:', e.message); 
+    const list = loadStickers();
+    
+    // إذا لم تكن هناك ملصقات محفوظة، ترد برسالة نصية بدلاً من الصمت
+    if (!list || list.length === 0) {
+        try {
+            api.sendMessage('💟 أنا ميرا! (يرجى من المطور حفظ ملصقات لي لأرسلها لك)', event.threadID);
+        } catch(e) {}
+        return;
     }
 
-    // 2. إرسال الملصق كرسالة مستقلة (بدون Reply)
-    const list = loadStickers();
-    if (!list.length) return;
-
     const pick = list[Math.floor(Math.random() * list.length)];
-    let msgPayload = { body: '' }; // body فارغ لتجنب أخطاء بعض الإطارات
-
     try {
         if (pick.type === 'id' && pick.id) {
-            msgPayload.sticker = pick.id;
-        } else if (pick.file) {
-            const filePath = path.join(STICKERS_DIR, pick.file);
-            if (!fs.existsSync(filePath)) return;
-            msgPayload.attachment = fs.createReadStream(filePath);
-        }
-
-        // إرسال الملصق بدون تمرير messageID (حتى لا يظهر "تم الرد عليك")
-        if (msgPayload.sticker || msgPayload.attachment) {
-            api.sendMessage(msgPayload, event.threadID, (err) => {
-                if (err) console.log('[ميرا] خطأ إرسال الملصق:', err);
+            // إرسال ستيكر الكيبورد
+            api.sendMessage({ sticker: pick.id }, event.threadID, (err) => {
+                if (err) {
+                    // محاولة بديلة إذا رفض الإطار إرسال الستيكر
+                    api.sendMessage({ attachment: [pick.id] }, event.threadID);
+                }
             });
+        } else if (pick.file) {
+            // إرسال ملف محفوظ
+            const filePath = path.join(STICKERS_DIR, pick.file);
+            if (fs.existsSync(filePath)) {
+                api.sendMessage({ attachment: fs.createReadStream(filePath) }, event.threadID, (err) => {
+                    if (err) console.log('[ميرا] فشل إرسال ملف الملصق:', err);
+                });
+            }
         }
     } catch(e) { 
-        console.log('[ميرا] خطأ:', e.message); 
+        console.log('[ميرا] استثناء أثناء إرسال الملصق:', e.message); 
     }
 }
 
 /* ═══════════ رد ذكي ═══════════ */
-async function aiReply({ api, event, helpers, text, cfg }) {
+async function aiReply({ api, event, text, cfg }) {
     const uid = String(event.senderID);
-    let info = {};
-    try { info = await new Promise(r => api.getUserInfo([uid], (e, d) => r(e ? {} : d || {}))); } catch (e) {}
-    
-    const user = info[uid] || {};
+    let user = {};
+    try { 
+        const info = await new Promise(r => api.getUserInfo([uid], (e, d) => r(e ? {} : d || {}))); 
+        user = info[uid] || {};
+    } catch (e) {}
+
     const isAdmin = !!(cfg && typeof cfg.isAdmin === 'function' && cfg.isAdmin(uid));
-    
     let name = user.name || 'صديقي';
     let gender = guessGender({ name, nickname: user.nickname || '', apiGender: user.gender || '', saved: loadGenders()[uid] });
     
     if (isAdmin) { name = 'تويكس'; gender = 'male'; }
-
     const A = addr(gender);
-    const cleanText = text.replace(/^\.?\s*ميرا\s*/i, '').trim();
-    if (!cleanText) return null;
 
-    const key = process.env.GEMINI_API_KEY || (cfg && (cfg.GEMINI_KEY || cfg.geminiKey));
-    
-    if (!key) {
-        const fallbacks = [
-            `${A.welcome} ${A.dear} 💟\nأنا ميرا، كيف أساعدك اليوم؟`,
-            `${A.dear}، أنا هنا 🩷 تفضل/تفضلي بسؤالك.`,
-            `أهلاً ${A.dear}، كيف حالك؟ 💟`
-        ];
-        if (cleanText.includes('كيف حالك') || cleanText.includes('كيفك')) {
-            return `${A.dear}، أنا بخير الحمد لله 💟 وأنت/أنتِ كيف حالك؟`;
-        }
-        return fallbacks[Math.floor(Math.random() * fallbacks.length)];
-    }
+    const cleanText = text.trim();
+    if (!cleanText) return `${A.welcome} ${A.dear} 💟`;
 
     const systemPrompt = `أنتِ "ميرا" — فتاة عربية ودودة وذكية وخفيفة الظل، تتحدثين العربية بأسلوب طبيعي مع لمسة عامية خفيفة.
 معلومات المتحدث الحالي:
@@ -182,18 +165,38 @@ async function aiReply({ api, event, helpers, text, cfg }) {
 - لا تكسري الشخصية أبداً ولا تذكري أنك ذكاء اصطناعي.
 رسالة المستخدم: "${cleanText}"`;
 
-    try {
-        const res = await axios.post(
-            `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${key}`,
-            { contents: [{ role: 'user', parts: [{ text: systemPrompt }] }], generationConfig: { maxOutputTokens: 250, temperature: 0.9, topP: 0.95 } },
-            { timeout: 20000, headers: { 'Content-Type': 'application/json' } }
-        );
-        const reply = res.data?.candidates?.[0]?.content?.parts?.[0]?.text;
-        if (reply) return reply.trim();
-    } catch (e) { 
-        console.log('[ميرا AI] فشل API:', e.message); 
+    const key = process.env.GEMINI_API_KEY || (cfg && (cfg.GEMINI_KEY || cfg.geminiKey));
+
+    // 1. المحاولة عبر Gemini إذا توفر المفتاح
+    if (key) {
+        try {
+            const res = await axios.post(
+                `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${key}`,
+                { contents: [{ role: 'user', parts: [{ text: systemPrompt }] }], generationConfig: { maxOutputTokens: 250, temperature: 0.9, topP: 0.95 } },
+                { timeout: 10000, headers: { 'Content-Type': 'application/json' } }
+            );
+            const reply = res.data?.candidates?.[0]?.content?.parts?.[0]?.text;
+            if (reply) return reply.trim();
+        } catch (e) { 
+            console.log('[ميرا AI] فشل Gemini، سأجرب API احتياطي...'); 
+        }
     }
-    return `${A.dear}، حدث خطأ مؤقت في تفكيري 🥲 حاول مجدداً بعد قليل.`;
+
+    // 2. المحاولة عبر API احتياطي مجاني (في حال عدم وجود مفتاح أو فشل Gemini)
+    try {
+        const prompt = encodeURIComponent(`${systemPrompt}\nميرا تجيب باختصار:`);
+        const res = await axios.get(`https://text.pollinations.ai/${prompt}`, { timeout: 15000 });
+        if (res.data && typeof res.data === 'string') {
+            let reply = res.data.trim();
+            if (reply.startsWith('ميرا:')) reply = reply.replace('ميرا:', '').trim();
+            if (reply.length > 0) return reply;
+        }
+    } catch (e) {
+        console.log('[ميرا AI] فشل API الاحتياطي:', e.message);
+    }
+
+    // 3. رد احتياطي أخير (لن تصمت ميرا أبداً)
+    return `${A.welcome} ${A.dear} 💟، كيف يمكنني مساعدتك اليوم؟`;
 }
 
 /* ═══════════ الإعدادات ═══════════ */
@@ -235,16 +238,22 @@ module.exports.run = async ({ api, event, args, helpers, cfg }) => {
         return helpers.reply(api, event, '⚠️ استخدم: .ميرا جنسي ولد | بنت | حذف');
     }
 
-    if (!sub) return triggerMira(api, event);
-
-    // إذا كان هناك بادئة ونص (مثل .ميرا كيف حالك)
+    // وضع التفاعل
     try { api.setMessageReaction('💟', event.messageID, () => {}, true); } catch(e) {}
-    const reply = await aiReply({ api, event, helpers, text: event.body, cfg });
+
+    if (!sub) {
+        // إذا كتب ".ميرا" فقط
+        return await triggerMira(api, event);
+    }
+
+    // إذا كتب ".ميرا + كلام"
+    const cleanText = event.body.replace(/^(\.\s*)?ميرا\s*/i, '').trim();
+    const reply = await aiReply({ api, event, text: cleanText, cfg });
     if (reply) return helpers.reply(api, event, reply);
 };
 
 /* ═══════════ بدون بادئة (onMessage) ═══════════ */
-module.exports.onMessage = async ({ api, event, helpers, cfg }) => {
+module.exports.onMessage = async ({ api, event, cfg }) => {
     try {
         if (!event.body || !event.senderID) return false;
         const text = String(event.body).trim();
@@ -252,49 +261,51 @@ module.exports.onMessage = async ({ api, event, helpers, cfg }) => {
         if (uid === String(api.getCurrentUserID())) return false;
 
         const prefix = (cfg && cfg.PREFIX) || '.';
-        if (text.startsWith(prefix)) return false;
+        if (text.startsWith(prefix)) return false; // الأوامر تذهب إلى run
 
         const isAdmin = !!(cfg && typeof cfg.isAdmin === 'function' && cfg.isAdmin(uid));
 
-        // 1) حفظ ملصق
+        // 1. حفظ ملصق
         if (isAdmin && event.messageReply && event.messageReply.attachments) {
             if (/^(حفظ|احفظ|خزن)$/i.test(text)) {
                 const att = event.messageReply.attachments[0];
                 if (att) {
                     const r = await saveSticker(api, event, att);
-                    await helpers.reply(api, event, r.msg);
+                    api.sendMessage(r.msg, event.threadID, () => {}, event.messageID);
                     return true;
                 }
             }
         }
 
-        // 2) كلمة "ميرا" فقط → تفاعل + ملصق
-        if (/^\.?\s*ميرا\s*$/i.test(text)) {
-            await triggerMira(api, event);
-            return true;
-        }
+        // 2. كشف كلمة ميرا (بدون بادئة)
+        if (!/^ميرا(\s|$)/i.test(text)) return false;
 
-        // 3) "ميرا" + نص (مثل: ميرا كيف حالك) → تفاعل + رد ذكي
-        if (/^\.?\s*ميرا\s+\S/i.test(text)) {
-            // التفاعل أولاً
-            try { 
-                if (typeof api.setMessageReaction === 'function') {
-                    api.setMessageReaction('💟', event.messageID, () => {}, true); 
-                }
-            } catch(e) {}
-            
-            // ثم الرد الذكي
-            const reply = await aiReply({ api, event, helpers, text, cfg });
+        // وضع التفاعل
+        try {
+            if (typeof api.setMessageReaction === 'function') {
+                api.setMessageReaction('💟', event.messageID, () => {}, true);
+            }
+        } catch(e) {}
+
+        const afterMira = text.replace(/^ميرا\s*/i, '').trim();
+
+        if (!afterMira) {
+            // ميرا فقط -> ملصق
+            await triggerMira(api, event);
+        } else {
+            // ميرا + كلام -> رد ذكي
+            const reply = await aiReply({ api, event, text: afterMira, cfg });
             if (reply) {
-                // نرسله كـ Reply لرسالة المستخدم
-                api.sendMessage({ body: reply }, event.threadID, () => {}, event.messageID);
-                return true;
+                // إرسال النص كرسالة عادية بدون "تم الرد عليك"
+                api.sendMessage(reply, event.threadID, (err) => {
+                    if (err) console.log('[ميرا] فشل إرسال الرد:', err);
+                });
             }
         }
 
-        return false;
+        return true;
     } catch (err) {
-        console.error('[ميرا onMessage] خطأ:', err);
+        console.error('[ميرا onMessage] خطأ عام:', err);
         return false;
     }
 };
