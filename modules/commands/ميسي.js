@@ -8,47 +8,21 @@ const { createCanvas, loadImage } = require('@napi-rs/canvas');
 module.exports.config = {
     name: 'ميسي',
     aliases: ['messi'],
-    description: 'إنشاء ميم ميسي بعبارة من اختيارك',
+    description: 'كتابة عبارة على صورة ميسي',
     usage: 'ميسي <النص>',
     category: 'fun',
     cooldown: 5,
     adminOnly: false
 };
 
-// رابط القالب
+// رابط الصورة الأصلية النظيفة
 const IMAGE_URL =
     'https://i.ibb.co/HDWd1RWK/Messenger-creation-2543598406122080.jpg';
 
-const MAX_TEXT_LENGTH = 120;
+const MAX_TEXT_LENGTH = 100;
 
-function wrapText(ctx, text, maxWidth) {
-    const words = text.split(/\s+/);
-    const lines = [];
-    let line = '';
-
-    for (const word of words) {
-        const test = line ? line + ' ' + word : word;
-
-        if (ctx.measureText(test).width > maxWidth && line) {
-            lines.push(line);
-            line = word;
-        } else {
-            line = test;
-        }
-    }
-
-    if (line) lines.push(line);
-    return lines;
-}
-
-module.exports.run = async ({
-    api,
-    event,
-    args,
-    helpers
-}) => {
-    const reply = text =>
-        helpers.reply(api, event, text);
+module.exports.run = async ({ api, event, args = [], helpers }) => {
+    const reply = message => helpers.reply(api, event, message);
 
     const text = args.join(' ')
         .replace(/[\u0000-\u001f]/g, ' ')
@@ -64,7 +38,7 @@ module.exports.run = async ({
         return reply('⚠️ العبارة طويلة جدًا، اختصرها قليلًا.');
     }
 
-    const tempFile = path.join(
+    const outputPath = path.join(
         os.tmpdir(),
         `messi-${Date.now()}-${Math.floor(Math.random() * 99999)}.jpg`
     );
@@ -77,10 +51,10 @@ module.exports.run = async ({
             true
         );
 
-        // تحميل الصورة
+        // تحميل القالب
         const response = await axios.get(IMAGE_URL, {
             responseType: 'arraybuffer',
-            timeout: 20000,
+            timeout: 25000,
             maxContentLength: 15 * 1024 * 1024
         });
 
@@ -88,7 +62,7 @@ module.exports.run = async ({
             Buffer.from(response.data)
         );
 
-        // إنشاء لوحة الرسم
+        // إنشاء الصورة بنفس أبعاد الأصل
         const canvas = createCanvas(
             image.width,
             image.height
@@ -105,73 +79,60 @@ module.exports.run = async ({
         );
 
         /*
-         * شريط العبارة الجديد أسفل الصورة.
-         * يمكن ضبط مكانه بعد معاينة الصورة الأصلية.
+         * موضع العبارة القديمة في الصورة:
+         * مركز الصورة أفقيًا
+         * ومركز منطقة العبارة رأسيًا
          */
-        const boxX = image.width * 0.05;
-        const boxY = image.height * 0.76;
-        const boxW = image.width * 0.90;
-        const boxH = image.height * 0.19;
+        const centerX = image.width * 0.5;
+        const centerY = image.height * 0.833;
 
-        ctx.fillStyle = '#171717';
-        ctx.fillRect(boxX, boxY, boxW, boxH);
+        // حدود عرض النص
+        const maxWidth = image.width * 0.88;
 
         // إعداد النص العربي
-        ctx.fillStyle = '#ffffff';
+        ctx.direction = 'rtl';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.direction = 'rtl';
+        ctx.fillStyle = '#ffffff';
 
-        let fontSize = Math.min(
-            76,
-            Math.floor(image.width * 0.10)
-        );
+        // خط عريض مشابه لعبارة القالب
+        let fontSize = image.width * 0.095;
 
-        const maxWidth = boxW * 0.92;
-        let lines;
+        while (fontSize > 24) {
+            ctx.font = `900 ${Math.round(fontSize)}px Arial`;
 
-        while (fontSize >= 20) {
-            ctx.font = `bold ${fontSize}px sans-serif`;
-            lines = wrapText(ctx, text, maxWidth);
-
-            const lineHeight = fontSize * 1.25;
-
-            if (
-                lines.length * lineHeight <= boxH * 0.85 &&
-                lines.every(
-                    line => ctx.measureText(line).width <= maxWidth
-                )
-            ) {
+            if (ctx.measureText(text).width <= maxWidth) {
                 break;
             }
 
             fontSize -= 2;
         }
 
-        ctx.font = `bold ${fontSize}px sans-serif`;
+        ctx.font = `900 ${Math.round(fontSize)}px Arial`;
 
-        const lineHeight = fontSize * 1.25;
-        const totalHeight = lines.length * lineHeight;
-        const startY = boxY + (boxH - totalHeight) / 2;
+        // ظل خفيف جدًا مثل وضوح النص في الصورة
+        ctx.shadowColor = 'rgba(0, 0, 0, 0.20)';
+        ctx.shadowBlur = 2;
+        ctx.shadowOffsetX = 1;
+        ctx.shadowOffsetY = 1;
 
-        lines.forEach((line, index) => {
-            ctx.fillText(
-                line,
-                image.width / 2,
-                startY + index * lineHeight + lineHeight / 2,
-                maxWidth
-            );
-        });
+        // كتابة النص فقط دون خلفية أو إطار
+        ctx.fillText(
+            text,
+            centerX,
+            centerY,
+            maxWidth
+        );
 
         // حفظ الصورة
         fs.writeFileSync(
-            tempFile,
-            canvas.toBuffer('image/jpeg', 92)
+            outputPath,
+            canvas.toBuffer('image/jpeg', 95)
         );
 
         // إرسال الصورة
         await new Promise((resolve, reject) => {
-            const stream = fs.createReadStream(tempFile);
+            const stream = fs.createReadStream(outputPath);
 
             stream.on('error', reject);
 
@@ -206,14 +167,13 @@ module.exports.run = async ({
         );
 
         return reply(
-            '❌ حدث خطأ أثناء إنشاء الصورة.\n' +
-            'تحقق من اتصال الخادم برابط الصورة.'
+            '❌ تعذر إنشاء الصورة. تحقق من اتصال الخادم ورابط القالب.'
         );
 
     } finally {
         try {
-            if (fs.existsSync(tempFile)) {
-                fs.unlinkSync(tempFile);
+            if (fs.existsSync(outputPath)) {
+                fs.unlinkSync(outputPath);
             }
         } catch (_) {}
     }
