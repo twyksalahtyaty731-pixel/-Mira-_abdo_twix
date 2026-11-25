@@ -1,12 +1,18 @@
 /**
- * ☾ لعبة المافيا — اختبار إقصائي داخل مجموعة مؤقتة
+ * ☾ لعبة المافيا — اختبار إقصائي، لكل لاعب مجموعة خاصة مع البوت
  *
- * • من 3 إلى 12 لاعباً. عند البدء ينشئ البوت مجموعة جديدة تضم اللاعبين ويلعبون فيها
- * • كل جولة: سؤال عشوائي للجميع، وأول إجابة صحيحة تكسب نقطة
- * • أول من يصل للهدف (الافتراضي 5) يفوز، وخطأ مرتين = إقصاء وإخراج من المجموعة
- * • إن بقي لاعب واحد فهو الفائز
- * • عند الانتهاء أو الإلغاء يُخرج البوت الجميع ثم يغادر ويحذف المجموعة
+ * • من 3 إلى 12 لاعباً، ويستطيع أي عضو في المجموعة بدء اللعبة
+ * • عند البدء ينشئ البوت لكل لاعب مجموعة خاصة (البوت + اللاعب فقط) فلا يرى أحد إجابات غيره
+ * • أسئلة عشوائية لكل لاعب في مجموعته، وأول من يصل للهدف (الافتراضي 5) يفوز
+ * • خطأ مرتين = إقصاء وحذف مجموعته، وإن بقي لاعب واحد فهو الفائز
+ * • عند الانتهاء أو الإلغاء يُخرج البوت كل لاعب ويغادر ويحذف المجموعات
  * • يعتمد على onMessage الذي يستدعيه main.js للرسائل العادية (بدون بادئة)
+ *
+ * ملاحظة: مكتبات الدخول ترفض عادةً إنشاء مجموعة بمشارك واحد، لذلك يضيف البوت
+ * صديقاً عشوائياً من أصدقاء حسابه (أو لاعباً آخر إن لم يتوفر) لحظة الإنشاء ثم يُخرجه
+ * فوراً قبل إرسال أي رسالة، فتبقى المجموعة للاعب والبوت فقط.
+ * الكلام الجانبي (رسالة طويلة أو بلا حروف) = إنذار، والثاني = إقصاء وحذف مجموعته.
+ * أي شخص غريب يدخل مجموعة لاعب يُطرد تلقائياً.
  *
  * الأوامر: مافيا انشاء | انضمام | بدء [هدف] | حالة | الغاء
  */
@@ -14,18 +20,19 @@ const deco = require('../../utils/decorations');
 
 const MIN_PLAYERS = 3;
 const MAX_PLAYERS = 12;
-const DEFAULT_TARGET = 5;           // عدد النقاط للفوز
+const DEFAULT_TARGET = 5;           // عدد الإجابات الصحيحة للفوز
 const MAX_STRIKES = 2;              // خطأان = إقصاء
-const MAX_SILENT_ROUNDS = 4;        // جولات متتالية بلا أي إجابة = إلغاء اللعبة
-const ANSWER_MAX_LEN = 60;          // الرسائل الأطول من هذا لا تُحسب إجابة
+const MAX_WARNINGS = 2;             // إنذار أول ثم الإقصاء عند الثاني (كلام جانبي)
+const ANSWER_MAX_LEN = 40;          // الرسالة الأطول من هذا تُعدّ كلاماً جانبياً
+const ANSWER_MAX_WORDS = 6;         // أكثر من هذا العدد من الكلمات = كلام جانبي
+const HELPER_TRIES = 3;             // عدد الأصدقاء الذين نجرّبهم كمساعد لإنشاء المجموعة
 
 const num = (v, d) => (Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v) : d);
-const IDLE_MS      = num(process.env.MAFIA_IDLE_MS, 30 * 60 * 1000); // خمول في الغرفة قبل البدء
-const ROUND_MS     = num(process.env.MAFIA_ROUND_MS, 40 * 1000);     // مهلة السؤال
-const PAUSE_MS     = num(process.env.MAFIA_PAUSE_MS, 2500);          // استراحة بين الجولات
-const START_DELAY  = num(process.env.MAFIA_START_MS, 4000);          // قبل أول سؤال
-const END_DELAY_MS = num(process.env.MAFIA_END_MS, 12000);           // قبل حذف المجموعة بعد الفوز
-const CANCEL_DELAY = num(process.env.MAFIA_CANCEL_MS, 3000);         // قبل حذف المجموعة بعد الإلغاء
+const IDLE_MS      = num(process.env.MAFIA_IDLE_MS, 30 * 60 * 1000); // خمول اللعبة قبل إلغائها
+const CREATE_GAP   = num(process.env.MAFIA_CREATE_GAP_MS, 1500);     // بين إنشاء مجموعة وأخرى
+const ELIM_DELAY   = num(process.env.MAFIA_ELIM_MS, 6000);           // قبل حذف مجموعة لاعب مقصى
+const END_DELAY_MS = num(process.env.MAFIA_END_MS, 12000);           // قبل حذف المجموعات بعد الفوز
+const CANCEL_DELAY = num(process.env.MAFIA_CANCEL_MS, 3000);         // قبل حذف المجموعات بعد الإلغاء
 const REMOVE_GAP   = num(process.env.MAFIA_RM_GAP_MS, 400);          // بين إخراج لاعب وآخر
 
 const GROUP_TITLE = '☾ المافيا';
@@ -171,6 +178,11 @@ function callApi(api, name, args, timeoutMs = 20000) {
   });
 }
 
+const groupIdFrom = (data) => {
+  const id = data && typeof data === 'object' ? (data.threadID || data.thread_id || data.id) : data;
+  return id ? String(id) : null;
+};
+
 const chances = (p) =>
   "●".repeat(Math.max(0, MAX_STRIKES - p.strikes)) + "○".repeat(Math.min(MAX_STRIKES, p.strikes));
 
@@ -178,72 +190,75 @@ const box = (body) => `${TITLE}\n${LINE}\n${body}\n${LINE}`;
 
 // ────── حالة الألعاب ─────────────────────────────────────────────
 const games = new Map();        // lobbyThreadID -> game
-const playIndex = new Map();    // playGroupID   -> game
-const playerIndex = new Map();  // userID        -> lobbyThreadID
+const groupIndex = new Map();   // privateGroupID -> { game, uid }
+const playerIndex = new Map();  // userID -> lobbyThreadID
 
 function addPlayer(game, id, name) {
-  game.players.set(id, { id, name, correct: 0, strikes: 0, alive: true, inGroup: false });
+  game.players.set(id, {
+    id, name, correct: 0, strikes: 0, warnings: 0, alive: true,
+    groupID: null, groupLive: false,
+    asked: new Set(), current: null, qn: 0, busy: false
+  });
   playerIndex.set(id, game.threadID);
-}
-
-function clearRound(game) {
-  if (game.round) {
-    game.round.closed = true;
-    clearTimeout(game.round.timer);
-  }
 }
 
 function cleanup(game) {
   clearTimeout(game.timer);
-  clearRound(game);
-  for (const id of game.players.keys()) {
-    if (playerIndex.get(id) === game.threadID) playerIndex.delete(id);
+  for (const p of game.players.values()) {
+    if (playerIndex.get(p.id) === game.threadID) playerIndex.delete(p.id);
+    if (p.groupID && groupIndex.get(p.groupID)?.game === game) groupIndex.delete(p.groupID);
   }
-  if (game.playID && playIndex.get(game.playID) === game) playIndex.delete(game.playID);
   if (games.get(game.threadID) === game) games.delete(game.threadID);
 }
 
 const aliveList = (game) => [...game.players.values()].filter((p) => p.alive);
-const inGroupIds = (game) => [...game.players.values()].filter((p) => p.inGroup).map((p) => p.id);
+const liveGroups = (game) => [...game.players.values()].filter((p) => p.groupLive);
 
 function findGame(event) {
   const tid = String(event.threadID);
-  return games.get(tid) || playIndex.get(tid) || games.get(playerIndex.get(String(event.senderID)));
+  const ref = groupIndex.get(tid);
+  return games.get(tid) || (ref && ref.game) || games.get(playerIndex.get(String(event.senderID)));
 }
 
-// إخراج الجميع ثم مغادرة البوت وحذف المحادثة من عنده
-async function teardown(api, playID, ids) {
-  if (!playID) return;
-  for (const id of ids) {
-    await callApi(api, 'removeUserFromGroup', [String(id), String(playID)]);
+// إخراج اللاعب ثم مغادرة البوت وحذف المحادثة من عنده
+async function teardown(api, groupID, memberIds) {
+  if (!groupID) return;
+  for (const id of memberIds) {
+    await callApi(api, 'removeUserFromGroup', [String(id), String(groupID)]);
     await sleep(REMOVE_GAP);
   }
   let me = '';
   try { me = api.getCurrentUserID ? String(api.getCurrentUserID()) : ''; } catch (_) {}
-  if (me) await callApi(api, 'removeUserFromGroup', [me, String(playID)]);
-  await callApi(api, 'deleteThread', [String(playID)]);
+  if (me) await callApi(api, 'removeUserFromGroup', [me, String(groupID)]);
+  await callApi(api, 'deleteThread', [String(groupID)]);
 }
 
-function scheduleTeardown(api, playID, ids, delay) {
-  if (!playID) return;
+function scheduleTeardown(api, groupID, memberIds, delay) {
+  if (!groupID) return;
   setTimeout(() => {
-    teardown(api, playID, ids).catch((e) => console.error('[mafia] teardown', e));
+    teardown(api, groupID, memberIds).catch((e) => console.error('[mafia] teardown', e));
   }, delay);
 }
 
-// إنهاء اللعبة بدون فائز (إلغاء/خمول/لا أحد يجيب)
-async function endCancelled(game, lobbyText, playText) {
+// يجدول حذف كل مجموعات اللاعبين الباقية ويعلّمها كمُغلقة
+function closeAllGroups(game, delay) {
+  const api = game.api;
+  for (const p of liveGroups(game)) {
+    p.groupLive = false;
+    scheduleTeardown(api, p.groupID, [p.id], delay);
+  }
+}
+
+// إنهاء اللعبة بدون فائز (إلغاء/خمول)
+async function endCancelled(game, text) {
   if (game.state === 'ended') return;
   game.state = 'ended';
   const api = game.api;
-  const playID = game.playID;
-  const ids = inGroupIds(game);
+  const live = liveGroups(game).map((p) => p.groupID);
+  closeAllGroups(game, CANCEL_DELAY);
   cleanup(game);
-  await send(api, box(lobbyText), game.threadID);
-  if (playID) {
-    await send(api, box(playText || `${lobbyText}\nستُحذف هذه المجموعة بعد لحظات.`), playID);
-    scheduleTeardown(api, playID, ids, CANCEL_DELAY);
-  }
+  await send(api, box(text), game.threadID);
+  for (const gid of live) await send(api, box(`${text}\nستُحذف هذه المجموعة بعد لحظات.`), gid);
 }
 
 function touch(game) {
@@ -255,66 +270,34 @@ function touch(game) {
   if (game.timer.unref) game.timer.unref();
 }
 
+function nextQuestion(p) {
+  let pool = QUESTIONS.map((_, i) => i).filter((i) => !p.asked.has(i));
+  if (!pool.length) {
+    p.asked.clear();
+    pool = QUESTIONS.map((_, i) => i);
+  }
+  const i = pool[Math.floor(Math.random() * pool.length)];
+  p.asked.add(i);
+  p.current = i;
+  p.qn++;
+  return QUESTIONS[i];
+}
+
+function qText(game, p, q) {
+  return box(`السؤال ${p.qn}\n\n${q.q}\n\n✔ ${p.correct}/${game.target}   الفرص ${chances(p)}`);
+}
+
+function ask(api, game, p, prefix) {
+  const q = nextQuestion(p);
+  return send(api, `${prefix ? prefix + "\n\n" : ""}${qText(game, p, q)}`, p.groupID);
+}
+
 function rowsText(game) {
   return [...game.players.values()]
     .map((p, i) => (p.alive
       ? `${i + 1}. ${p.name} — ✔ ${p.correct}/${game.target} · ${chances(p)}`
       : `${i + 1}. ${p.name} — 🌑 خرج`))
     .join('\n');
-}
-
-// ────── الجولات ─────────────────────────────────────────────────
-function pickQuestion(game) {
-  let pool = QUESTIONS.map((_, i) => i).filter((i) => !game.asked.has(i));
-  if (!pool.length) {
-    game.asked.clear();
-    pool = QUESTIONS.map((_, i) => i);
-  }
-  const i = pool[Math.floor(Math.random() * pool.length)];
-  game.asked.add(i);
-  return i;
-}
-
-// يغلق الجولة مرة واحدة فقط (متزامن) ويرجع true لمن أغلقها
-function closeRound(round) {
-  if (!round || round.closed) return false;
-  round.closed = true;
-  clearTimeout(round.timer);
-  return true;
-}
-
-async function startRound(game) {
-  if (game.state !== 'playing') return;
-  const idx = pickQuestion(game);
-  game.qn++;
-  const round = { idx, attempts: new Set(), closed: false, timer: null };
-  game.round = round;
-  round.timer = setTimeout(() => {
-    onRoundTimeout(game, round).catch((e) => console.error('[mafia]', e));
-  }, ROUND_MS);
-  await send(game.api, box(
-`السؤال ${game.qn}
-
-${QUESTIONS[idx].q}
-
-أول إجابة صحيحة تكسب نقطة · الهدف ${game.target}
-لكل لاعب محاولة واحدة في كل سؤال`), game.playID);
-}
-
-async function nextRound(game) {
-  await sleep(PAUSE_MS);
-  await startRound(game);
-}
-
-async function onRoundTimeout(game, round) {
-  if (game.state !== 'playing' || game.round !== round || !closeRound(round)) return;
-  game.silent = round.attempts.size === 0 ? game.silent + 1 : 0;
-  const answer = QUESTIONS[round.idx].a[0];
-  await send(game.api, `⏱ انتهى الوقت\nالإجابة: ${answer}`, game.playID);
-  if (game.silent >= MAX_SILENT_ROUNDS) {
-    return endCancelled(game, '☾ أُلغيت اللعبة لعدم وجود إجابات.');
-  }
-  return nextRound(game);
 }
 
 async function finish(api, game, winnerID, reason) {
@@ -325,37 +308,152 @@ async function finish(api, game, winnerID, reason) {
     .sort((a, b) => (b.id === winnerID) - (a.id === winnerID) || b.correct - a.correct)
     .map((x, i) => `${i + 1}. ${x.name} — ✔ ${x.correct} · ✖ ${x.strikes}${x.alive ? '' : '  (خرج)'}`)
     .join('\n');
-  const why = reason === 'target' ? `وصل إلى ${game.target} نقاط أولاً` : 'آخر لاعب متبقٍ';
+  const why = reason === 'target' ? `وصل إلى ${game.target} إجابات صحيحة أولاً` : 'آخر لاعب متبقٍ';
   const body = `انتهت اللعبة\n\n🏆 الفائز: ${winner ? winner.name : '—'}\n${why}\n\nالنتائج:\n${rows}`;
-  const playID = game.playID;
-  const ids = inGroupIds(game);
+  const live = liveGroups(game).map((p) => ({ gid: p.groupID, id: p.id }));
+  closeAllGroups(game, END_DELAY_MS);
   cleanup(game);
   await send(api, box(body), game.threadID);
-  if (playID) {
-    await send(api, box(`${body}\n\nستُحذف هذه المجموعة بعد لحظات.`), playID);
-    scheduleTeardown(api, playID, ids, END_DELAY_MS);
+  for (const g of live) {
+    const note = g.id === winnerID ? '🏆 مبروك، أنت الفائز!\n\n' : '';
+    await send(api, box(`${note}${body}\n\nستُحذف هذه المجموعة بعد لحظات.`), g.gid);
   }
+}
+
+// هل الرسالة تشبه إجابة؟ (قصيرة وفيها حروف أو أرقام) وإلا فهي كلام جانبي
+const isAnswerLike = (t) =>
+  t.length <= ANSWER_MAX_LEN &&
+  t.split(/\s+/).filter(Boolean).length <= ANSWER_MAX_WORDS &&
+  /[\p{L}\p{N}]/u.test(t);
+
+// إقصاء لاعب: تُقفل مجموعته وتُحذف بعد مهلة، ويُعلن الفائز إن بقي واحد
+async function eliminate(api, game, p, title) {
+  p.alive = false;
+  p.current = null;
+  const alive = aliveList(game); // يُحسب قبل أي انتظار
+  p.groupLive = false;
+  groupIndex.delete(p.groupID); // ما يكتبه بعد الآن يُتجاهل
+  scheduleTeardown(api, p.groupID, [p.id], ELIM_DELAY);
+  await send(api, box(`${title}\nخرجت من اللعبة، وستُحذف هذه المجموعة بعد لحظات.`), p.groupID);
+  if (alive.length <= 1) {
+    return finish(api, game, alive[0] ? alive[0].id : null, 'last');
+  }
+  return send(api, `🌑 ${p.name} خرج من اللعبة — المتبقون: ${alive.length}`, game.threadID);
+}
+
+// كلام جانبي: إنذار أول، وفي الثاني إقصاء وطرد وحذف المجموعة
+async function handleSideTalk(api, game, p) {
+  touch(game);
+  p.warnings++;
+  if (p.warnings >= MAX_WARNINGS) {
+    return eliminate(api, game, p, '⛔ كلام جانبي للمرة الثانية\nتم إقصاؤك وطردك.');
+  }
+  const q = QUESTIONS[p.current];
+  return send(api, box(
+`⚠️ إنذار ${p.warnings}/${MAX_WARNINGS}
+الكلام الجانبي ممنوع أثناء اللعبة، اكتب إجابة السؤال فقط وبكلمات قليلة.
+المرة القادمة تُقصى وتُحذف مجموعتك.
+
+السؤال الحالي:
+${q.q}`), p.groupID);
+}
+
+async function handleAnswer(api, game, p, text) {
+  touch(game);
+  const q = QUESTIONS[p.current];
+  const ok = q.a.some((x) => norm(x) === norm(text));
+
+  if (ok) {
+    p.correct++;
+    if (p.correct >= game.target) return finish(api, game, p.id, 'target');
+    return ask(api, game, p, '✔ إجابة صحيحة');
+  }
+
+  p.strikes++;
+  if (p.strikes >= MAX_STRIKES) {
+    return eliminate(api, game, p, '✖ إجابة خاطئة\nانتهت فرصك.');
+  }
+  return ask(api, game, p, '✖ إجابة خاطئة — تبقّت لك فرصة واحدة');
+}
+
+// ────── إنشاء مجموعة خاصة للاعب (البوت + اللاعب فقط) ─────────────
+async function createPrivateGroup(game, p, allIds) {
+  const api = game.api;
+
+  // المحاولة الأولى: اللاعب وحده (تنجح إن كانت المكتبة تسمح بذلك)
+  if (!game.needsHelper) {
+    const r = await callApi(api, 'createNewGroup', [[p.id], GROUP_TITLE], 45000);
+    const id = groupIdFrom(r.data);
+    if (!r.err && id) return { id };
+    if (/at least|2 IDs|participantIDs/i.test(errText(r.err))) game.needsHelper = true;
+  }
+
+  // المحاولة الثانية: نضيف مساعداً مؤقتاً ثم نُخرجه فوراً قبل إرسال أي رسالة.
+  // الأفضل صديق عشوائي من أصدقاء حساب البوت (فلا يعرف لاعب آخر شيئاً)، وإلا لاعب آخر.
+  const helpers = await pickHelpers(game, p, allIds);
+  if (!helpers.length) return { err: new Error('لا يوجد مساعد لإنشاء المجموعة') };
+
+  let lastErr = null;
+  for (const helper of helpers) {
+    const r = await callApi(api, 'createNewGroup', [[p.id, helper], GROUP_TITLE], 45000);
+    const id = groupIdFrom(r.data);
+    if (r.err || !id) {
+      lastErr = r.err || new Error('لم تُرجع المكتبة رقم المجموعة');
+      continue;
+    }
+    const rm = await callApi(api, 'removeUserFromGroup', [helper, id]);
+    if (rm.err) {
+      // لو بقي المساعد في المجموعة لرأى الأسئلة، فلا نكمل
+      await teardown(api, id, [p.id, helper]);
+      return { err: new Error(`تعذّر عزل المجموعة (${errText(rm.err)})`) };
+    }
+    return { id };
+  }
+  return { err: lastErr };
+}
+
+// مرشحو المساعدة: أصدقاء عشوائيون من حساب البوت أولاً، ثم لاعب آخر كاحتياط
+async function pickHelpers(game, p, allIds) {
+  const api = game.api;
+  if (!game.friends) {
+    const r = await callApi(api, 'getFriendsList', []);
+    let me = '';
+    try { me = api.getCurrentUserID ? String(api.getCurrentUserID()) : ''; } catch (_) {}
+    const list = Array.isArray(r.data) ? r.data : [];
+    game.friends = list
+      .map((f) => String((f && (f.userID || f.id)) || ''))
+      .filter((id) => id && id !== me && !allIds.includes(id));
+  }
+  const pool = game.friends.slice();
+  for (let i = pool.length - 1; i > 0; i--) {         // خلط عشوائي
+    const j = Math.floor(Math.random() * (i + 1));
+    [pool[i], pool[j]] = [pool[j], pool[i]];
+  }
+  const out = pool.slice(0, HELPER_TRIES);
+  const otherPlayer = allIds.find((x) => x !== p.id);
+  if (otherPlayer) out.push(otherPlayer);
+  return out;
 }
 
 // ────── نصوص ─────────────────────────────────────────────────────
 function helpText(prefix) {
   return box(
-`لعبة اختبار إقصائية تُلعب في مجموعة مؤقتة ينشئها البوت.
+`اختبار إقصائي: لكل لاعب مجموعة خاصة مع البوت، فلا يرى أحد إجابات غيره.
 يلزم ${MIN_PLAYERS} لاعبين على الأقل.
 
 ${prefix}مافيا انشاء — فتح غرفة جديدة
 ${prefix}مافيا انضمام — الانضمام للغرفة
-${prefix}مافيا بدء — بدء اللعبة (المضيف)
+${prefix}مافيا بدء — بدء اللعبة (لأي عضو)
 ${prefix}مافيا حالة — عرض الحالة
 ${prefix}مافيا الغاء — إلغاء اللعبة (المضيف)
 
 القواعد
-• عند البدء ينشئ البوت مجموعة تضم اللاعبين
-• سؤال لكل جولة، وأول إجابة صحيحة تكسب نقطة
-• أول من يجمع ${DEFAULT_TARGET} نقاط يفوز
+• عند البدء ينشئ البوت لكل لاعب مجموعة خاصة ويسأله فيها
+• أول من يجمع ${DEFAULT_TARGET} إجابات صحيحة يفوز
 • خطأ مرتين = إقصاء
 • إن بقي لاعب واحد فقط فهو الفائز
-• تُحذف المجموعة بعد انتهاء اللعبة`);
+• الكلام الجانبي ممنوع: إنذار ثم إقصاء وطرد
+• تُحذف المجموعات بعد انتهاء اللعبة`);
 }
 
 function statusText(game) {
@@ -365,7 +463,7 @@ function statusText(game) {
       .join('\n');
     return box(`غرفة الانتظار — ${game.players.size} لاعب\n\n${rows}`);
   }
-  return box(`اللعبة جارية — الهدف ${game.target} نقاط\n\n${rowsText(game)}`);
+  return box(`اللعبة جارية — الهدف ${game.target} إجابات صحيحة\n\n${rowsText(game)}`);
 }
 
 const SUB = {
@@ -382,7 +480,7 @@ const SUB = {
 module.exports.config = {
   name: 'مافيا',
   aliases: ['mafia'],
-  description: 'لعبة اختبار إقصائية: ينشئ البوت مجموعة للاعبين ويحذفها بعد الانتهاء',
+  description: 'اختبار إقصائي: ينشئ البوت لكل لاعب مجموعة خاصة ويحذفها بعد الانتهاء',
   usage: 'مافيا [انشاء | انضمام | بدء | حالة | الغاء]',
   category: 'games',
   cooldown: 2,
@@ -401,15 +499,14 @@ module.exports.run = async ({ api, event, args = [], helpers, cfg }) => {
   // ── إنشاء غرفة
   if (sub === "create") {
     if (isDM(event)) return reply("هذا الأمر يعمل داخل المجموعات فقط.");
-    if (playIndex.has(String(threadID))) return reply("هذه مجموعة لعب جارية، افتح الغرفة من مجموعتك الأصلية.");
+    if (groupIndex.has(String(threadID))) return reply("هذه مجموعة لعب خاصة، افتح الغرفة من مجموعتك الأصلية.");
     if (games.has(threadID)) return reply(`توجد لعبة قائمة هنا بالفعل. استخدم: ${prefix}مافيا حالة`);
     if (playerIndex.has(senderID)) return reply("أنت مشارك في لعبة أخرى حالياً.");
 
     const name = await getName(senderID);
     const game = {
       threadID, hostID: senderID, state: "lobby", target: DEFAULT_TARGET,
-      players: new Map(), api, timer: null, startedAt: null,
-      playID: null, round: null, asked: new Set(), qn: 0, silent: 0
+      players: new Map(), api, timer: null, startedAt: null, needsHelper: false
     };
     addPlayer(game, senderID, name);
     games.set(threadID, game);
@@ -420,10 +517,10 @@ module.exports.run = async ({ api, event, args = [], helpers, cfg }) => {
 المضيف: ${name}
 
 • للانضمام: ${prefix}مافيا انضمام
-• للبدء (${MIN_PLAYERS} لاعبين أو أكثر): ${prefix}مافيا بدء
-• للإلغاء: ${prefix}مافيا الغاء
+• للبدء (${MIN_PLAYERS} لاعبين أو أكثر، ولأي عضو): ${prefix}مافيا بدء
+• للإلغاء (المضيف): ${prefix}مافيا الغاء
 
-عند البدء ينشئ البوت مجموعة جديدة تضم اللاعبين.`));
+عند البدء ينشئ البوت لكل لاعب مجموعة خاصة معه، فلا يرى أحد إجابات غيره.`));
   }
 
   // ── انضمام
@@ -452,20 +549,21 @@ module.exports.run = async ({ api, event, args = [], helpers, cfg }) => {
   if (sub === "cancel") {
     const game = findGame(event);
     if (!game) return reply("لا توجد لعبة لإلغائها.");
-    if (game.hostID !== senderID) return reply("المضيف وحده يستطيع إلغاء اللعبة.");
+    const isBotAdmin = !!(cfg && typeof cfg.isAdmin === 'function' && cfg.isAdmin(String(senderID)));
+    if (game.hostID !== senderID && !isBotAdmin) return reply("المضيف وحده يستطيع إلغاء اللعبة.");
 
     const tid = String(threadID);
+    const inside = tid === String(game.threadID) || groupIndex.get(tid)?.game === game;
     await endCancelled(game, "☾ ألغى المضيف اللعبة.");
-    if (tid !== String(game.threadID) && tid !== String(game.playID)) await reply("تم إلغاء اللعبة.");
+    if (!inside) await reply("تم إلغاء اللعبة.");
     return;
   }
 
-  // ── بدء
+  // ── بدء (لأي عضو)
   if (sub === "start") {
     const game = games.get(threadID);
     if (!game) return reply(`لا توجد غرفة مفتوحة. ابدأ واحدة بـ: ${prefix}مافيا انشاء`);
     if (game.state !== "lobby") return reply("اللعبة بدأت بالفعل.");
-    if (game.hostID !== senderID) return reply("المضيف وحده يستطيع بدء اللعبة.");
     if (game.players.size < MIN_PLAYERS) {
       return reply(`العدد غير كافٍ: ${game.players.size}/${MIN_PLAYERS} لاعبين على الأقل.`);
     }
@@ -475,120 +573,112 @@ module.exports.run = async ({ api, event, args = [], helpers, cfg }) => {
 
     game.state = "creating";
     touch(game);
-    await reply(box("جارٍ إنشاء مجموعة اللعب…"));
+    await reply(box(`جارٍ إنشاء ${game.players.size} مجموعات خاصة، قد يستغرق هذا دقيقة…`));
 
+    // ── إنشاء مجموعة لكل لاعب بالتتابع
     const ids = [...game.players.keys()];
-    const r = await callApi(api, 'createNewGroup', [ids, GROUP_TITLE], 45000);
-    const data = r.data;
-    const playID = data && (data.threadID || data.thread_id || data.id || (typeof data !== 'object' ? data : null));
+    const failed = [];
+    for (const p of [...game.players.values()]) {
+      const r = await createPrivateGroup(game, p, ids);
 
-    // أُلغيت اللعبة أثناء الإنشاء: نحذف المجموعة التي أُنشئت
-    if (game.state !== "creating") {
-      if (!r.err && playID) scheduleTeardown(api, String(playID), ids, 0);
-      return;
+      // أُلغيت اللعبة أثناء الإنشاء: نحذف المجموعة التي وصلت متأخرة (الباقي تولّاه الإلغاء)
+      if (game.state !== "creating") {
+        if (r.id) scheduleTeardown(api, r.id, [p.id], 0);
+        return;
+      }
+      if (r.id) {
+        p.groupID = r.id;
+        p.groupLive = true;
+      } else {
+        failed.push({ p, err: r.err });
+      }
+      await sleep(CREATE_GAP);
+      if (game.state !== "creating") return;
     }
 
-    if (r.err || !playID) {
+    // ── من فشل إنشاء مجموعته يُستبعد
+    for (const f of failed) {
+      game.players.delete(f.p.id);
+      if (playerIndex.get(f.p.id) === game.threadID) playerIndex.delete(f.p.id);
+    }
+    const failNames = failed.map((f) => f.p.name).join("، ");
+    const failWhy = failed.length ? errText(failed[0].err) : '';
+
+    if (game.players.size < MIN_PLAYERS) {
+      // لم يعد العدد كافياً: نحذف ما أُنشئ ونعيد الغرفة للانتظار
+      closeAllGroups(game, 0);
+      for (const p of game.players.values()) p.groupID = null;
       game.state = "lobby";
       touch(game);
       return reply(box(
-`تعذّر إنشاء مجموعة اللعب
-السبب: ${errText(r.err || 'لم تُرجع المكتبة رقم المجموعة')}
+`تعذّر إنشاء المجموعات الخاصة${failNames ? `\nاللاعبون المستبعدون: ${failNames}\nالسبب: ${failWhy}` : ''}
 
-تأكد أن البوت يستطيع إضافة اللاعبين (يفضّل أن يكونوا أصدقاءه أو سبق لهم مراسلته).
-ثم أعد المحاولة: ${prefix}مافيا بدء`));
+لم يعد العدد كافياً (${game.players.size}/${MIN_PLAYERS}).
+تأكد أن البوت يستطيع إضافة اللاعبين (يفضّل أن يكونوا أصدقاءه أو سبق لهم مراسلته)، ثم انضموا وأعيدوا: ${prefix}مافيا بدء`));
     }
 
-    game.playID = String(playID);
-    playIndex.set(game.playID, game);
     game.state = "playing";
     game.startedAt = Date.now();
-    for (const p of game.players.values()) p.inGroup = true;
+    for (const p of game.players.values()) groupIndex.set(p.groupID, { game, uid: p.id });
     touch(game);
 
     const names = [...game.players.values()].map((p) => p.name).join("، ");
-    await reply(box(`تم إنشاء مجموعة اللعب «${GROUP_TITLE}»\nانتقلوا إليها، وسيبدأ السؤال الأول بعد لحظات.\n\nاللاعبون: ${names}`));
-    await send(api, box(
-`بدأت لعبة المافيا
+    await reply(box(
+`بدأت اللعبة
 اللاعبون: ${names}
+${failNames ? `\nاستُبعد (تعذّر إنشاء مجموعته): ${failNames}\n` : ''}
+أُنشئت لكل لاعب مجموعة خاصة معه، فأجب هناك.
+الهدف: ${game.target} إجابات صحيحة · خطأ مرتين = إقصاء`));
 
-• كل جولة سؤال، وأول إجابة صحيحة تكسب نقطة
-• أول من يجمع ${game.target} نقاط يفوز
+    // ── أول سؤال لكل لاعب في مجموعته الخاصة
+    for (const p of [...game.players.values()]) {
+      if (game.state !== "playing") return;
+      const q = nextQuestion(p);
+      const intro = box(
+`بدأت لعبة المافيا
+هذه مجموعتك الخاصة مع البوت، أجب هنا.
+
+• أول من يجمع ${game.target} إجابات صحيحة يفوز
 • خطأ مرتين = إقصاء
-• لكل لاعب محاولة واحدة في كل سؤال
-• كل رسالة قصيرة تكتبها تُحسب إجابة، فلا تكتب شيئاً آخر
-
-استعدوا…`), game.playID);
-
-    await sleep(START_DELAY);
-    await startRound(game);
+• آخر لاعب يبقى يفوز أيضاً
+• الكلام الجانبي ممنوع: إنذار ثم إقصاء وحذف المجموعة
+• اكتب الإجابة فقط وبكلمات قليلة`) + "\n\n" + qText(game, p, q);
+      await send(api, intro, p.groupID);
+      await sleep(300);
+    }
   }
 };
 
 // ═══════════════════════════════════════════════
-// 📩 إجابات اللاعبين داخل مجموعة اللعب (يستدعيه main.js للرسائل بدون بادئة)
-// يرجع true إذا حُسبت الرسالة إجابة وتمت معالجتها
+// 📩 إجابات اللاعبين في مجموعاتهم الخاصة (يستدعيه main.js للرسائل بدون بادئة)
+// يرجع true إذا كانت الرسالة إجابة لاعب وتمت معالجتها
 // ═══════════════════════════════════════════════
 module.exports.onMessage = async ({ api, event }) => {
   try {
     if (!event || !event.body) return false;
-    const game = playIndex.get(String(event.threadID));
-    if (!game || game.state !== "playing") return false;
+    const ref = groupIndex.get(String(event.threadID));
+    if (!ref) return false;
+    const game = ref.game;
+    if (game.state !== "playing") return false;
 
     const uid = String(event.senderID);
+    if (uid !== ref.uid) {
+      // شخص غريب في المجموعة الخاصة: يُطرد حتى لا يرى الأسئلة
+      await callApi(api, 'removeUserFromGroup', [uid, String(event.threadID)]);
+      return true;
+    }
     const p = game.players.get(uid);
-    if (!p || !p.alive) return false;
-
-    const round = game.round;
-    if (!round || round.closed || round.attempts.has(uid)) return false;
+    if (!p || !p.alive || p.current == null || p.busy) return false;
 
     const text = String(event.body).trim();
-    if (!text || text.length > ANSWER_MAX_LEN || !/[\p{L}\p{N}]/u.test(text)) return false;
+    if (!text) return false;
 
-    // ── من هنا حتى أول await كل شيء متزامن، فلا يتجاوز إجابتان الجولة نفسها
-    touch(game);
-    game.silent = 0;
-    round.attempts.add(uid);
-    const q = QUESTIONS[round.idx];
-    const ok = q.a.some((x) => norm(x) === norm(text));
-    const pid = game.playID;
-
-    if (ok) {
-      closeRound(round);
-      p.correct++;
-      if (p.correct >= game.target) {
-        await finish(api, game, p.id, "target");
-        return true;
-      }
-      await send(api, box(`✔ ${p.name} أجاب صح (+1)\nالإجابة: ${q.a[0]}\n\n${rowsText(game)}`), pid);
-      await nextRound(game);
-      return true;
-    }
-
-    p.strikes++;
-    const eliminated = p.strikes >= MAX_STRIKES;
-    if (eliminated) p.alive = false;
-    const alive = aliveList(game);
-    const lastStanding = alive.length <= 1;
-    const allTried = alive.every((x) => round.attempts.has(x.id));
-    const endRound = lastStanding || allTried;
-    if (endRound) closeRound(round);
-
-    if (eliminated) {
-      await send(api, `🌑 ${p.name} أخطأ مرتين وخرج من اللعبة — المتبقون: ${alive.length}`, pid);
-      p.inGroup = false;
-      await callApi(api, 'removeUserFromGroup', [uid, pid]);
-    } else {
-      await send(api, `✖ ${p.name} إجابة خاطئة — تبقّت لك فرصة واحدة`, pid);
-    }
-
-    if (lastStanding) {
-      await finish(api, game, alive[0] ? alive[0].id : null, "last");
-      return true;
-    }
-    if (endRound) {
-      await send(api, `لم يجب أحد بشكل صحيح\nالإجابة: ${q.a[0]}`, pid);
-      await nextRound(game);
+    p.busy = true;
+    try {
+      if (isAnswerLike(text)) await handleAnswer(api, game, p, text);
+      else await handleSideTalk(api, game, p);
+    } finally {
+      p.busy = false;
     }
     return true;
   } catch (e) {
