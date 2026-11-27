@@ -4,7 +4,7 @@
   "description": "بوت ماسنجر عربي: اقتصاد ومستويات وأدوات",
   "main": "main.js",
   "scripts": {
-    "start": "node main.js"
+    "start": "node start.js"
   },
   "engines": {
     "node": ">=22.12"
