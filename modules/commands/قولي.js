@@ -1,10 +1,13 @@
 /**
  * 🎙️ قولي — البوت يقول ما تكتبه كرسالة صوتية
- * الصوت: مايكروسوفت العراقي ar-IQ-RanaNeural (أنثى شابة، لهجة عراقية) بنبرة هادئة وحنونة
+ * الصوت: ElevenLabs إن ضبطت المتغيرين ELEVENLABS_API_KEY وELEVENLABS_VOICE_ID (الأطبع)،
+ *        وإلا مايكروسوفت العراقي ar-IQ-RanaNeural (أنثى، لهجة عراقية)
  *
  * المكتبات (نفّذ مرة واحدة في مجلد البوت):
  *     npm install node-edge-tts
- * الترتيب: node-edge-tts ← edge-tts-universal (اختياري) ← Google TTS (احتياطي بصوت مختلف)
+ * الترتيب: ElevenLabs (إن فُعّل) ← node-edge-tts ← edge-tts-universal (اختياري) ← Google TTS (احتياطي)
+ *
+ * ملاحظة: الأصوات تقرأ النص كما هو مكتوب، فاكتب بالإملاء العراقي (شلونك، شكو ماكو، هواية).
  */
 const fs = require("fs");
 const os = require("os");
@@ -12,22 +15,29 @@ const path = require("path");
 
 const MAX_CHARS = 500;
 const MIN_AUDIO_BYTES = 1000;
-const HEAD = "⌬ ━━ MIRA FUN ━━ ⌬";
+const HEAD = "⌬ ━━ 𝗞𝗜𝗥𝗔 FUN ━━ ⌬";
 
-// صوت واحد: بنت عراقية شابة. البطء الخفيف ورفع النبرة قليلاً يعطيان إحساساً أنعم وأحنّ.
+// صوت مايكروسوفت: بنت عراقية. أرجعت السرعة والنبرة للوضع الطبيعي لأن تغييرهما يزيد الصوت اصطناعاً.
 const VOICE = {
     voice: "ar-IQ-RanaNeural",
     lang: "ar-IQ",
-    rate: "-10%",     // أبطأ قليلاً (يمكنك تعديلها: -15% أحن وأبطأ، 0% عادي)
-    pitch: "+5%",     // نبرة أعلى قليلاً
+    rate: "default",
+    pitch: "default",
     volume: "default"
 };
+
+// ElevenLabs (اختياري، الأطبع): فعّله بمتغيرين في راندر (Environment):
+//   ELEVENLABS_API_KEY  = مفتاحك من ElevenLabs
+//   ELEVENLABS_VOICE_ID = رقم صوت البنت العراقية التي اخترتها من مكتبة الأصوات
+const ELEVEN_KEY = () => (process.env.ELEVENLABS_API_KEY || "").trim();
+const ELEVEN_VOICE = () => (process.env.ELEVENLABS_VOICE_ID || "").trim();
+const ELEVEN_MODEL = () => (process.env.ELEVENLABS_MODEL || "eleven_multilingual_v2").trim();
 
 module.exports.config = {
     name: "قولي",
     version: "5.0.0",
-    credits: "تويكس",
-    description: "البوت يقول ما تكتبه كرسالة صوتية بصوت بنت عراقية شابة حنونة",
+    credits: "ايمن",
+    description: "البوت يقول ما تكتبه كرسالة صوتية بصوت بنت عراقية",
     usage: "قولي <النص>",
     category: "fun",
     cooldown: 3,
@@ -51,9 +61,28 @@ async function viaNodeEdgeTts(text, out) {
 
 async function viaEdgeUniversal(text, out) {
     const mod = await import("edge-tts-universal");   // حزمة ESM
-    const tts = new mod.EdgeTTS(text, VOICE.voice, { rate: VOICE.rate, pitch: "+5Hz", volume: "+0%" });
+    const tts = new mod.EdgeTTS(text, VOICE.voice);
     const result = await tts.synthesize();
     fs.writeFileSync(out, Buffer.from(await result.audio.arrayBuffer()));
+}
+
+// POST https://api.elevenlabs.io/v1/text-to-speech/{voice_id}  (الصيغة من وثائق ElevenLabs)
+async function viaElevenLabs(text, out) {
+    const axios = require("axios");
+    const res = await axios.post(
+        `https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(ELEVEN_VOICE())}`,
+        {
+            text,
+            model_id: ELEVEN_MODEL(),
+            voice_settings: { stability: 0.45, similarity_boost: 0.8, style: 0.35, speed: 1 }
+        },
+        {
+            headers: { "xi-api-key": ELEVEN_KEY(), "Content-Type": "application/json", Accept: "audio/mpeg" },
+            responseType: "arraybuffer",
+            timeout: 30000
+        }
+    );
+    fs.writeFileSync(out, Buffer.from(res.data));
 }
 
 async function viaGoogle(text, out) {
@@ -78,11 +107,13 @@ function audioOk(file) {
 
 // يرجع { engine, errors } أو يرمي خطأ إن فشلت كل الطرق
 async function synthesize(text, out) {
-    const attempts = [
+    const attempts = [];
+    if (ELEVEN_KEY() && ELEVEN_VOICE()) attempts.push(["elevenlabs", () => viaElevenLabs(text, out)]);
+    attempts.push(
         ["node-edge-tts", () => viaNodeEdgeTts(text, out)],
         ["edge-tts-universal", () => viaEdgeUniversal(text, out)],
         ["google", () => viaGoogle(text, out)]
-    ];
+    );
     const errors = [];
     for (const [engine, fn] of attempts) {
         try {
@@ -113,8 +144,8 @@ module.exports.run = async ({ api, event, args = [] }) => {
 
     try {
         const { engine, errors } = await synthesize(text, file);
-        if (engine === "google") {
-            console.warn("[قولي] تعذّر صوت مايكروسوفت، استُخدم صوت Google:", errors.join(" | "));
+        if (engine !== "elevenlabs" && errors.length) {
+            console.warn(`[قولي] استُخدم ${engine} بعد فشل:`, errors.join(" | "));
         }
 
         // حذف رسالة المستخدم (تنجح فقط إن سمحت الصلاحيات، وتُتجاهل إن لم تنجح)
