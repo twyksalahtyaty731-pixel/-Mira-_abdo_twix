@@ -1,0 +1,43 @@
+{
+  "61596184286688": {
+    "level": 1,
+    "xp": 0,
+    "toolLevel": 0,
+    "field": [
+      {
+        "crop": "corn",
+        "plantedAt": 1795882415313
+      },
+      {
+        "crop": "corn",
+        "plantedAt": 1795882418535
+      },
+      {
+        "crop": "corn",
+        "plantedAt": 1795882420564
+      },
+      {
+        "crop": "corn",
+        "plantedAt": 1795882424332
+      },
+      {
+        "crop": "corn",
+        "plantedAt": 1795882426347
+      },
+      {
+        "crop": "corn",
+        "plantedAt": 1795882428394
+      },
+      {
+        "crop": "corn",
+        "plantedAt": 1795882430422
+      },
+      {
+        "crop": "corn",
+        "plantedAt": 1795882432824
+      }
+    ],
+    "totalEarned": 0,
+    "totalHarvests": 0
+  }
+}
