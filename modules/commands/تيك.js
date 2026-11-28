@@ -115,7 +115,36 @@ function parseVideos(d) {
         .filter((v) => v.id && v.urls.length && (v.duration === 0 || (v.duration >= MIN_SEC && v.duration <= MAX_SEC)));
 }
 
+const RAPID_KEY = () => (process.env.RAPIDAPI_KEY || process.env.TIKTOK_RAPIDAPI_KEY || '').trim();
+const RAPID_HOST = () => (process.env.TIKTOK_RAPIDAPI_HOST || 'tiktok-scraper7.p.rapidapi.com').trim();
+
+// يحوّل أي خطأ إلى رسالة مفهومة (صفحة Cloudflare = حظر عنوان السيرفر)
+function explain(e) {
+    const raw = e && e.response && e.response.data !== undefined ? e.response.data : null;
+    const txt = typeof raw === 'string' ? raw : raw ? JSON.stringify(raw) : '';
+    const msg = txt || (e && e.message) || String(e);
+    const err = new Error(/just a moment|cloudflare|<!doctype html/i.test(msg)
+        ? 'tikwm محجوبة من هذا السيرفر (Cloudflare)'
+        : (raw && raw.message) || (raw && raw.msg) || msg.slice(0, 140));
+    if (/cloudflare|just a moment|<!doctype html/i.test(msg)) err.code = 'CF';
+    if (e && e.response && (e.response.status === 401 || e.response.status === 403) && !err.code) err.code = 'AUTH';
+    if (e && e.response && e.response.status === 429) err.code = 'LIMIT';
+    return err;
+}
+
 async function searchTikTok(axios, keywords) {
+    // 1) RapidAPI (موصى به): لا يُحجب مثل الخدمة المجانية
+    if (RAPID_KEY()) {
+        try {
+            const res = await axios.get(`https://${RAPID_HOST()}/feed/search`, {
+                params: { keywords, region: 'sa', count: 20, cursor: 0, publish_time: 0, sort_type: 0 },
+                headers: { 'x-rapidapi-key': RAPID_KEY(), 'x-rapidapi-host': RAPID_HOST() }, timeout: 25000
+            });
+            return parseVideos(res.data);
+        } catch (e) { throw explain(e); }
+    }
+
+    // 2) الخدمة المجانية tikwm (قد تُحجب من سيرفرات الاستضافة)
     const headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36',
         Accept: 'application/json, text/javascript, */*; q=0.01', Origin: HOST, Referer: HOST + '/',
@@ -131,21 +160,16 @@ async function searchTikTok(axios, keywords) {
             });
             return parseVideos(res.data);
         } catch (e) {
-            lastErr = e;
-            const msg = (e.response && e.response.data && (e.response.data.msg || JSON.stringify(e.response.data).slice(0, 120))) || e.message;
-            lastErr = new Error(msg);
-            // احتياطي: نفس الطلب بصيغة GET
+            lastErr = explain(e);
+            if (lastErr.code === 'CF') break;
             try {
                 await throttle();
                 const res = await axios.get(`${HOST}/api/feed/search`, {
                     params: { keywords, count: 20, cursor: 0, web: 1, hd: 1 }, headers, timeout: 20000
                 });
                 return parseVideos(res.data);
-            } catch (e2) {
-                const m2 = (e2.response && e2.response.data && (e2.response.data.msg || JSON.stringify(e2.response.data).slice(0, 120))) || e2.message;
-                lastErr = new Error(`${msg} | GET: ${m2}`);
-            }
-            if (!isLimit(lastErr.message)) break;      // غير الحد: لا فائدة من الإعادة
+            } catch (e2) { lastErr = explain(e2); }
+            if (!isLimit(lastErr.message) && lastErr.code !== 'LIMIT') break;
             await sleep(1500);
         }
     }
@@ -218,7 +242,7 @@ async function handle(api, event, query) {
         let sent = false, lastErr = null;
         for (const kw of await queryVariants(axios, query)) {
             let videos;
-            try { videos = await searchTikTok(axios, kw); } catch (e) { lastErr = e; log('بحث فشل:', kw, e.message); continue; }
+            try { videos = await searchTikTok(axios, kw); } catch (e) { lastErr = e; log('بحث فشل:', kw, e.message); if (e.code === 'CF' || e.code === 'AUTH') break; continue; }
             const cands = pickCandidates(videos, key).slice(0, 4);
             for (const v of cands) {
                 try {
