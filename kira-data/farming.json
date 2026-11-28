@@ -90,44 +90,44 @@
     "totalHarvests": 0
   },
   "61596424832596": {
-    "level": 1,
-    "xp": 0,
+    "level": 3,
+    "xp": 156,
     "toolLevel": 0,
     "field": [
       {
         "crop": "corn",
-        "plantedAt": 1795899332849
+        "plantedAt": 1795903020961
       },
       {
         "crop": "corn",
-        "plantedAt": 1795899337914
+        "plantedAt": 1795903027903
       },
       {
         "crop": "corn",
-        "plantedAt": 1795899342822
+        "plantedAt": 1795903032948
       },
       {
         "crop": "corn",
-        "plantedAt": 1795899349353
+        "plantedAt": 1795903036280
       },
       {
         "crop": "corn",
-        "plantedAt": 1795899352896
+        "plantedAt": 1795903041240
       },
       {
         "crop": "corn",
-        "plantedAt": 1795899355151
+        "plantedAt": 1795903043539
       },
       {
         "crop": "corn",
-        "plantedAt": 1795899357539
+        "plantedAt": 1795903046033
       },
       {
         "crop": "corn",
-        "plantedAt": 1795899361133
+        "plantedAt": 1795903048201
       }
     ],
-    "totalEarned": 0,
-    "totalHarvests": 0
+    "totalEarned": 3532,
+    "totalHarvests": 8
   }
 }
