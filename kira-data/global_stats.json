@@ -1,15 +1,15 @@
 {
     "61595522514650": {
-        "level": 1,
-        "xp": 98,
-        "points": 100,
+        "level": 2,
+        "xp": 48,
+        "points": 150,
         "rank": "مبتدئ ✨",
         "inventory": [],
         "lastDaily": 0
     },
     "61586609816135": {
         "level": 2,
-        "xp": 42,
+        "xp": 116,
         "points": 150,
         "rank": "مبتدئ ✨",
         "inventory": [],
@@ -33,7 +33,7 @@
     },
     "61580530461952": {
         "level": 2,
-        "xp": 33,
+        "xp": 38,
         "points": 150,
         "rank": "مبتدئ ✨",
         "inventory": [],
@@ -57,7 +57,7 @@
     },
     "61583663769232": {
         "level": 2,
-        "xp": 48,
+        "xp": 78,
         "points": 150,
         "rank": "مبتدئ ✨",
         "inventory": [],
@@ -81,7 +81,7 @@
     },
     "61596854664636": {
         "level": 2,
-        "xp": 21,
+        "xp": 56,
         "points": 150,
         "rank": "مبتدئ ✨",
         "inventory": [],
@@ -89,7 +89,7 @@
     },
     "61595307013103": {
         "level": 1,
-        "xp": 38,
+        "xp": 83,
         "points": 100,
         "rank": "مبتدئ ✨",
         "inventory": [],
@@ -104,16 +104,16 @@
         "lastDaily": 1795882741953
     },
     "61593460111156": {
-        "level": 1,
-        "xp": 83,
-        "points": 100,
+        "level": 2,
+        "xp": 8,
+        "points": 150,
         "rank": "مبتدئ ✨",
         "inventory": [],
         "lastDaily": 0
     },
     "61578447308545": {
         "level": 1,
-        "xp": 26,
+        "xp": 80,
         "points": 100,
         "rank": "مبتدئ ✨",
         "inventory": [],
@@ -153,7 +153,7 @@
     },
     "100077977273950": {
         "level": 1,
-        "xp": 34,
+        "xp": 40,
         "points": 100,
         "rank": "مبتدئ ✨",
         "inventory": [],
@@ -169,7 +169,7 @@
     },
     "61555333953452": {
         "level": 1,
-        "xp": 43,
+        "xp": 85,
         "points": 100,
         "rank": "مبتدئ ✨",
         "inventory": [],
@@ -194,6 +194,62 @@
     "100094407242941": {
         "level": 1,
         "xp": 13,
+        "points": 100,
+        "rank": "مبتدئ ✨",
+        "inventory": [],
+        "lastDaily": 0
+    },
+    "61596358664576": {
+        "level": 1,
+        "xp": 49,
+        "points": 100,
+        "rank": "مبتدئ ✨",
+        "inventory": [],
+        "lastDaily": 0
+    },
+    "61595150408966": {
+        "level": 1,
+        "xp": 34,
+        "points": 100,
+        "rank": "مبتدئ ✨",
+        "inventory": [],
+        "lastDaily": 0
+    },
+    "61578791842283": {
+        "level": 1,
+        "xp": 14,
+        "points": 100,
+        "rank": "مبتدئ ✨",
+        "inventory": [],
+        "lastDaily": 0
+    },
+    "61590028195643": {
+        "level": 1,
+        "xp": 58,
+        "points": 100,
+        "rank": "مبتدئ ✨",
+        "inventory": [],
+        "lastDaily": 0
+    },
+    "61594573786668": {
+        "level": 1,
+        "xp": 15,
+        "points": 100,
+        "rank": "مبتدئ ✨",
+        "inventory": [],
+        "lastDaily": 0
+    },
+    "100076269693499": {
+        "level": 1,
+        "xp": 15,
+        "points": 100,
+        "rank": "مبتدئ ✨",
+        "inventory": [],
+        "lastDaily": 0
+    },
+    "61596002612318": {
+        "level": 1,
+        "xp": 5,
         "points": 100,
         "rank": "مبتدئ ✨",
         "inventory": [],
