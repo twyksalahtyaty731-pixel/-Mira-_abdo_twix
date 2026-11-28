@@ -1,8 +1,8 @@
 {
     "61595522514650": {
         "level": 3,
-        "xp": 12,
-        "points": 200,
+        "xp": 65,
+        "points": 50,
         "rank": "مبتدئ ✨",
         "inventory": [],
         "lastDaily": 0
@@ -32,9 +32,9 @@
         "lastDaily": 0
     },
     "61580530461952": {
-        "level": 2,
-        "xp": 194,
-        "points": 150,
+        "level": 3,
+        "xp": 31,
+        "points": 200,
         "rank": "مبتدئ ✨",
         "inventory": [],
         "lastDaily": 0
@@ -233,7 +233,7 @@
     },
     "61594573786668": {
         "level": 2,
-        "xp": 14,
+        "xp": 40,
         "points": 150,
         "rank": "مبتدئ ✨",
         "inventory": [],
@@ -433,7 +433,7 @@
     },
     "61586986085221": {
         "level": 1,
-        "xp": 43,
+        "xp": 72,
         "points": 100,
         "rank": "مبتدئ ✨",
         "inventory": [],
@@ -488,12 +488,12 @@
         "lastDaily": 0
     },
     "61596424832596": {
-        "level": 1,
-        "xp": 46,
-        "points": 100,
+        "level": 2,
+        "xp": 8,
+        "points": 459,
         "rank": "مبتدئ ✨",
         "inventory": [],
-        "lastDaily": 0
+        "lastDaily": 1795899786538
     },
     "61590638554633": {
         "level": 1,
@@ -530,6 +530,38 @@
     "61596634323830": {
         "level": 1,
         "xp": 7,
+        "points": 100,
+        "rank": "مبتدئ ✨",
+        "inventory": [],
+        "lastDaily": 0
+    },
+    "61553564246244": {
+        "level": 1,
+        "xp": 41,
+        "points": 100,
+        "rank": "مبتدئ ✨",
+        "inventory": [],
+        "lastDaily": 0
+    },
+    "61595160677558": {
+        "level": 1,
+        "xp": 63,
+        "points": 100,
+        "rank": "مبتدئ ✨",
+        "inventory": [],
+        "lastDaily": 0
+    },
+    "61595705125663": {
+        "level": 1,
+        "xp": 10,
+        "points": 100,
+        "rank": "مبتدئ ✨",
+        "inventory": [],
+        "lastDaily": 0
+    },
+    "61575079466004": {
+        "level": 1,
+        "xp": 10,
         "points": 100,
         "rank": "مبتدئ ✨",
         "inventory": [],
