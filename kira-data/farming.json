@@ -3,7 +3,40 @@
     "level": 3,
     "xp": 156,
     "toolLevel": 0,
-    "field": [],
+    "field": [
+      {
+        "crop": "corn",
+        "plantedAt": 1795901377636
+      },
+      {
+        "crop": "corn",
+        "plantedAt": 1795901394876
+      },
+      {
+        "crop": "corn",
+        "plantedAt": 1795901401593
+      },
+      {
+        "crop": "corn",
+        "plantedAt": 1795901437236
+      },
+      {
+        "crop": "corn",
+        "plantedAt": 1795901441681
+      },
+      {
+        "crop": "corn",
+        "plantedAt": 1795901446167
+      },
+      {
+        "crop": "corn",
+        "plantedAt": 1795901449802
+      },
+      {
+        "crop": "corn",
+        "plantedAt": 1795901451803
+      }
+    ],
     "totalEarned": 3717,
     "totalHarvests": 8
   },
