@@ -1,7 +1,7 @@
 {
     "61595522514650": {
         "level": 1,
-        "xp": 45,
+        "xp": 53,
         "points": 100,
         "rank": "مبتدئ ✨",
         "inventory": [],
@@ -9,7 +9,7 @@
     },
     "61586609816135": {
         "level": 1,
-        "xp": 67,
+        "xp": 99,
         "points": 100,
         "rank": "مبتدئ ✨",
         "inventory": [],
@@ -33,7 +33,7 @@
     },
     "61580530461952": {
         "level": 1,
-        "xp": 69,
+        "xp": 90,
         "points": 100,
         "rank": "مبتدئ ✨",
         "inventory": [],
@@ -56,9 +56,9 @@
         "lastDaily": 0
     },
     "61583663769232": {
-        "level": 1,
-        "xp": 75,
-        "points": 100,
+        "level": 2,
+        "xp": 10,
+        "points": 150,
         "rank": "مبتدئ ✨",
         "inventory": [],
         "lastDaily": 0
@@ -73,7 +73,7 @@
     },
     "61588725249479": {
         "level": 1,
-        "xp": 49,
+        "xp": 71,
         "points": 100,
         "rank": "مبتدئ ✨",
         "inventory": [],
@@ -81,7 +81,7 @@
     },
     "61596854664636": {
         "level": 1,
-        "xp": 48,
+        "xp": 86,
         "points": 100,
         "rank": "مبتدئ ✨",
         "inventory": [],
@@ -105,7 +105,63 @@
     },
     "61593460111156": {
         "level": 1,
-        "xp": 28,
+        "xp": 49,
+        "points": 100,
+        "rank": "مبتدئ ✨",
+        "inventory": [],
+        "lastDaily": 0
+    },
+    "61578447308545": {
+        "level": 1,
+        "xp": 11,
+        "points": 100,
+        "rank": "مبتدئ ✨",
+        "inventory": [],
+        "lastDaily": 0
+    },
+    "61587536961350": {
+        "level": 1,
+        "xp": 11,
+        "points": 100,
+        "rank": "مبتدئ ✨",
+        "inventory": [],
+        "lastDaily": 0
+    },
+    "61596471402890": {
+        "level": 1,
+        "xp": 23,
+        "points": 100,
+        "rank": "مبتدئ ✨",
+        "inventory": [],
+        "lastDaily": 0
+    },
+    "61596696135045": {
+        "level": 1,
+        "xp": 11,
+        "points": 100,
+        "rank": "مبتدئ ✨",
+        "inventory": [],
+        "lastDaily": 0
+    },
+    "61571709500559": {
+        "level": 1,
+        "xp": 11,
+        "points": 100,
+        "rank": "مبتدئ ✨",
+        "inventory": [],
+        "lastDaily": 0
+    },
+    "100077977273950": {
+        "level": 1,
+        "xp": 5,
+        "points": 100,
+        "rank": "مبتدئ ✨",
+        "inventory": [],
+        "lastDaily": 0
+    },
+    "61596259829045": {
+        "level": 1,
+        "xp": 10,
         "points": 100,
         "rank": "مبتدئ ✨",
         "inventory": [],
