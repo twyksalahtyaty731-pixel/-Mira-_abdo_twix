@@ -39,7 +39,7 @@ const EN = {
     'ليفاي': 'levi ackerman', 'ايرين': 'eren yeager', 'إيرين': 'eren yeager', 'غون': 'gon freecss', 'كيلوا': 'killua',
     'غوجو': 'gojo satoru', 'جوجو': 'gojo satoru', 'سوكونا': 'sukuna', 'تانجيرو': 'tanjiro', 'ديكو': 'deku',
     'اوباما': 'obito', 'أوبيتو': 'obito', 'اوبيتو': 'obito', 'شانكس': 'shanks', 'ايس': 'ace one piece',
-    'جوكر': 'joker', 'باتمان': 'batman', 'سبايدرمان': 'spiderman', 'ثانوس': 'thanos', 'ايرون مان': 'iron man',
+    'غون': 'gon', 'كورابيكا': 'kurapika', 'هيسوكا': 'hisoka', 'ميكاسا': 'mikasa', 'ريم': 'rem re zero', 'ايزاغي': 'isagi', 'ناجي': 'nagi', 'ليلوش': 'lelouch', 'لايت': 'light yagami', 'ال': 'l lawliet', 'جوكر': 'joker', 'باتمان': 'batman', 'سبايدرمان': 'spiderman', 'ثانوس': 'thanos', 'ايرون مان': 'iron man',
     'توماس شيلبي': 'thomas shelby', 'ميسي': 'messi', 'رونالدو': 'ronaldo', 'نيمار': 'neymar', 'مبابي': 'mbappe'
 };
 
@@ -47,46 +47,116 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const log = (...a) => console.log('[تيك]', ...a);
 const norm = (s) => String(s || '').replace(/[ً-ٰٟـ]/g, '').replace(/\s+/g, ' ').trim();
 
-function queryVariants(q) {
-    const en = EN[q] || EN[q.replace(/[أإآ]/g, 'ا')];
-    const list = [];
-    if (en) list.push(`${en} edit`, `${en} amv`);
-    list.push(`${q} edit`, `${q} ايديت`);
-    if (en) list.push(en);
-    list.push(q);
-    return [...new Set(list)];
+const hasArabic = (s) => /[\u0600-\u06FF]/.test(s);
+const trCache = new Map();
+
+// ترجمة/نطق الاسم العربي إلى الإنجليزية عبر خدمة Google المفتوحة (تعمل لأي اسم)
+async function toEnglish(axios, q) {
+    if (trCache.has(q)) return trCache.get(q);
+    const out = [];
+    try {
+        const res = await axios.get('https://translate.googleapis.com/translate_a/single', {
+            params: { client: 'gtx', sl: 'ar', tl: 'en', dt: ['t', 'rm'], q },
+            paramsSerializer: (p) => Object.entries(p).flatMap(([k, v]) => [].concat(v).map((x) => `${k}=${encodeURIComponent(x)}`)).join('&'),
+            timeout: 8000, headers: { 'User-Agent': 'Mozilla/5.0' }
+        });
+        const seg = (res.data && res.data[0]) || [];
+        const tr = seg.map((x) => x && x[0]).filter(Boolean).join('').trim();
+        const rm = seg.map((x) => x && x[3]).filter(Boolean).join('').trim();
+        for (const w of [tr, rm]) {
+            const c = String(w || '').replace(/[^\p{L}\p{N} '-]/gu, '').trim().toLowerCase();
+            if (c && !hasArabic(c) && c.length <= 40 && !out.includes(c)) out.push(c);
+        }
+    } catch (e) { log('ترجمة فشلت:', e.message); }
+    trCache.set(q, out);
+    if (trCache.size > 500) trCache.delete(trCache.keys().next().value);
+    return out;
 }
+
+async function queryVariants(axios, q) {
+    const known = EN[q] || EN[q.replace(/[أإآ]/g, 'ا')];
+    const names = known ? [known] : (hasArabic(q) && axios ? await toEnglish(axios, q) : []);
+    const list = [];
+    for (const en of names) {
+        const first = en.split(' ')[0];
+        list.push(`${en} edit`, `${first} edit`);
+    }
+    for (const en of names) list.push(`${en} anime edit`, `${en} amv`);
+    list.push(`${q} edit`, `${q} ايديت`);
+    for (const en of names) list.push(en);
+    list.push(q);
+    if (!hasArabic(q)) list.push(`${q} anime edit`, `${q} movie edit`);
+    return [...new Set(list)].slice(0, 9);
+}
+
+// tikwm يسمح تقريباً بطلب واحد كل ثانية: نفرض فاصلاً بين أي طلبين إليه
+let lastHit = 0;
+async function throttle() {
+    const wait = lastHit + 1200 - Date.now();
+    lastHit = Math.max(Date.now(), lastHit) + (wait > 0 ? wait : 0);
+    if (wait > 0) await sleep(wait);
+}
+const isLimit = (m) => /limit|too many|frequen|1 ?request|second/i.test(String(m || ''));
 
 const abs = (u) => (!u ? '' : /^https?:/i.test(u) ? u : u.startsWith('//') ? 'https:' + u : HOST + (u.startsWith('/') ? '' : '/') + u);
 
-async function searchTikTok(axios, keywords) {
-    const body = new URLSearchParams({ keywords, count: '20', cursor: '0', web: '1', hd: '1' }).toString();
-    const res = await axios.post(`${HOST}/api/feed/search`, body, {
-        headers: {
-            'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36',
-            Accept: 'application/json', Origin: HOST, Referer: HOST + '/'
-        },
-        timeout: 20000
-    });
-    const d = res.data;
+function parseVideos(d) {
     if (!d || d.code !== 0 || !d.data) throw new Error((d && d.msg) || 'رد غير متوقع من الخدمة');
-    return (d.data.videos || [])
+    const arr = d.data.videos || d.data.aweme_list || [];
+    return arr
         .map((v) => ({
-            id: String(v.video_id || v.id || ''),
-            title: norm(v.title).slice(0, 80),
-            author: v.author && (v.author.unique_id || v.author.nickname) || '',
+            id: String(v.video_id || v.id || v.aweme_id || ''),
+            title: norm(v.title || v.desc).slice(0, 80),
+            author: (v.author && (v.author.unique_id || v.author.nickname)) || '',
             duration: Number(v.duration) || 0,
             size: Number(v.size) || 0,
             urls: [abs(v.play), abs(v.hdplay), abs(v.wmplay)].filter(Boolean)
         }))
-        .filter((v) => v.id && v.urls.length && v.duration >= MIN_SEC && v.duration <= MAX_SEC);
+        .filter((v) => v.id && v.urls.length && (v.duration === 0 || (v.duration >= MIN_SEC && v.duration <= MAX_SEC)));
+}
+
+async function searchTikTok(axios, keywords) {
+    const headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36',
+        Accept: 'application/json, text/javascript, */*; q=0.01', Origin: HOST, Referer: HOST + '/',
+        'X-Requested-With': 'XMLHttpRequest'
+    };
+    let lastErr;
+    for (let attempt = 0; attempt < 3; attempt++) {
+        await throttle();
+        try {
+            const body = new URLSearchParams({ keywords, count: '20', cursor: '0', web: '1', hd: '1' }).toString();
+            const res = await axios.post(`${HOST}/api/feed/search`, body, {
+                headers: { ...headers, 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' }, timeout: 20000
+            });
+            return parseVideos(res.data);
+        } catch (e) {
+            lastErr = e;
+            const msg = (e.response && e.response.data && (e.response.data.msg || JSON.stringify(e.response.data).slice(0, 120))) || e.message;
+            lastErr = new Error(msg);
+            // احتياطي: نفس الطلب بصيغة GET
+            try {
+                await throttle();
+                const res = await axios.get(`${HOST}/api/feed/search`, {
+                    params: { keywords, count: 20, cursor: 0, web: 1, hd: 1 }, headers, timeout: 20000
+                });
+                return parseVideos(res.data);
+            } catch (e2) {
+                const m2 = (e2.response && e2.response.data && (e2.response.data.msg || JSON.stringify(e2.response.data).slice(0, 120))) || e2.message;
+                lastErr = new Error(`${msg} | GET: ${m2}`);
+            }
+            if (!isLimit(lastErr.message)) break;      // غير الحد: لا فائدة من الإعادة
+            await sleep(1500);
+        }
+    }
+    throw lastErr;
 }
 
 async function download(axios, urls, dest) {
     let lastErr;
     for (const url of urls) {
         try {
+            if (url.startsWith(HOST)) await throttle();
             const res = await axios.get(url, {
                 responseType: 'arraybuffer', timeout: 60000,
                 maxContentLength: MAX_BYTES(), maxBodyLength: MAX_BYTES(),
@@ -146,9 +216,9 @@ async function handle(api, event, query) {
 
         const key = `${threadID}|${query}`;
         let sent = false, lastErr = null;
-        for (const kw of queryVariants(query)) {
+        for (const kw of await queryVariants(axios, query)) {
             let videos;
-            try { videos = await searchTikTok(axios, kw); } catch (e) { lastErr = e; log('بحث فشل:', kw, e.message); await sleep(600); continue; }
+            try { videos = await searchTikTok(axios, kw); } catch (e) { lastErr = e; log('بحث فشل:', kw, e.message); continue; }
             const cands = pickCandidates(videos, key).slice(0, 4);
             for (const v of cands) {
                 try {
@@ -174,7 +244,8 @@ async function handle(api, event, query) {
         if (waitID) { try { api.unsendMessage(waitID, () => {}); } catch (_) { /* تجاهل */ } }
         if (!sent) {
             log('لم يُرسل فيديو:', (lastErr && lastErr.message) || lastErr);
-            await reply(`❌ ما لقيت فيديو مناسب لـ «${query}». جرّب اسماً آخر أو اكتبه بالإنجليزية.`);
+            const why = lastErr && lastErr.message ? `\nالسبب: ${String(lastErr.message).slice(0, 120)}` : '';
+            await reply(`❌ ما لقيت فيديو مناسب لـ «${query}». جرّب اسماً آخر أو اكتبه بالإنجليزية.${why}`);
         }
     } finally {
         cleanup();
@@ -204,4 +275,4 @@ module.exports.onMessage = async ({ api, event }) => {
 // مع البادئة: .تيك سايتاما
 module.exports.run = async ({ api, event, args = [] }) => handle(api, event, args.join(' '));
 
-module.exports._test = { queryVariants, searchTikTok };
+module.exports._test = { queryVariants, searchTikTok, toEnglish };
